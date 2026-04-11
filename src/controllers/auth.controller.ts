@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import User from "../shared/models/user.model";
+import Admin from "../shared/models/admin.model";
 import generateToken from "../utils/generateToken";
 
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
@@ -134,33 +135,28 @@ export const loginAdmin = async (req: Request, res: Response): Promise<void> => 
 			return;
 		}
 
-		const user = await User.findOne({ email });
-		if (!user) {
+		const admin = await Admin.findOne({ email });
+		if (!admin) {
 			res.status(401).json({ message: "Invalid credentials" });
 			return;
 		}
 
-		const isPasswordValid = await bcrypt.compare(password, user.password);
+		const isPasswordValid = await bcrypt.compare(password, admin.password);
 		if (!isPasswordValid) {
 			res.status(401).json({ message: "Invalid credentials" });
 			return;
 		}
 
-		if (user.role !== "admin") {
-			res.status(403).json({ message: "Access denied. Not an admin account." });
-			return;
-		}
-
-		const token = generateToken(user._id.toString());
+		const token = generateToken(admin._id.toString());
 
 		res.status(200).json({
 			message: "Admin login successful",
 			token,
 			user: {
-				id: user._id,
-				name: user.name,
-				email: user.email,
-				role: user.role,
+				id: admin._id,
+				name: admin.name,
+				email: admin.email,
+				role: "admin",
 			},
 		});
 	} catch (error) {
@@ -185,28 +181,33 @@ export const registerAdmin = async (req: Request, res: Response): Promise<void> 
 
 		const existingUser = await User.findOne({ email });
 		if (existingUser) {
-			res.status(409).json({ message: "User already exists" });
+			res.status(409).json({ message: "Email already exists as user" });
+			return;
+		}
+
+		const existingAdmin = await Admin.findOne({ email });
+		if (existingAdmin) {
+			res.status(409).json({ message: "Admin already exists" });
 			return;
 		}
 
 		const hashedPassword = await bcrypt.hash(password, 10);
-		const user = await User.create({
+		const admin = await Admin.create({
 			name,
 			email,
 			password: hashedPassword,
-			role: "admin",
 		});
 
-		const token = generateToken(user._id.toString());
+		const token = generateToken(admin._id.toString());
 
 		res.status(201).json({
 			message: "Admin registered successfully",
 			token,
 			user: {
-				id: user._id,
-				name: user.name,
-				email: user.email,
-				role: user.role,
+				id: admin._id,
+				name: admin.name,
+				email: admin.email,
+				role: "admin",
 			},
 		});
 	} catch (error) {

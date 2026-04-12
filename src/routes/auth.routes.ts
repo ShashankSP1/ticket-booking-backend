@@ -1,9 +1,30 @@
 import { Router } from "express";
-import { loginUser, registerUser } from "../controllers/auth.controller";
+import {
+	loginAdmin,
+	loginUser,
+	registerAdmin,
+	registerUser,
+} from "../controllers/auth.controller";
 
 const router = Router();
 
-router.post("/register", registerUser);
-router.post("/login", loginUser);
+const isAdminRole = (role: unknown): boolean =>
+	typeof role === "string" && role.toLowerCase() === "admin";
+
+router.post("/register", (req, res) => {
+	if (isAdminRole(req.body?.role)) {
+		return registerAdmin(req, res);
+	}
+
+	return registerUser(req, res);
+});
+
+router.post("/login", (req, res) => {
+	if (isAdminRole(req.body?.role)) {
+		return loginAdmin(req, res);
+	}
+
+	return loginUser(req, res);
+});
 
 export default router;

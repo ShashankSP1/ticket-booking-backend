@@ -1,24 +1,23 @@
 import { Router } from "express";
 import {
 	createBooking,
+	getAllBookings,
+	getBookingsByUser,
 	getUserBookings,
-	getBookingById,
 	cancelBooking,
-	getEventBookings,
-	confirmBooking,
 } from "../controllers/booking.controller";
-import { protect } from "../middleware/auth.middleware";
+import { protect, requireAdmin } from "../middleware/auth.middleware";
+// Note: getBookingById, getEventBookings, confirmBooking removed — replaced by flat schema endpoints
 
 const router = Router();
 
 // User routes
-router.post("/", protect, createBooking);
-router.get("/my-bookings", protect, getUserBookings);
-router.get("/:bookingId", protect, getBookingById);
-router.put("/:bookingId/cancel", protect, cancelBooking);
+router.post("/", protect, createBooking);                        // Create booking
+router.get("/my-bookings", protect, getUserBookings);            // Token-based history
+router.get("/user/:email", protect, getBookingsByUser);          // History by email
+router.put("/:id/cancel", protect, cancelBooking);               // Cancel a booking
 
 // Admin routes
-router.get("/event/:eventId", protect, getEventBookings);
-router.put("/:bookingId/confirm", protect, confirmBooking);
+router.get("/", protect, requireAdmin, getAllBookings);           // All bookings table
 
 export default router;

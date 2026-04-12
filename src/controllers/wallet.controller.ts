@@ -153,6 +153,8 @@ export const getWalletTransactions = async (req: AuthenticatedRequest, res: Resp
     // Transform response to include id field
     const transformedTransactions = transactions.map((tx) => ({
       id: tx._id,
+      userEmail: tx.userEmail,
+      userName: tx.userName,
       type: tx.type,
       amount: tx.amount,
       description: tx.description,
@@ -280,6 +282,7 @@ export const approveTopupRequest = async (req: AuthenticatedRequest, res: Respon
     const userTransaction = new WalletTransaction({
       userId: topupRequest.userId,
       userEmail: topupRequest.userEmail,
+      userName: topupRequest.userName,
       type: "credit",
       amount: topupRequest.amount,
       description: `Wallet top-up approved via ${topupRequest.paymentMode}`,
@@ -293,6 +296,7 @@ export const approveTopupRequest = async (req: AuthenticatedRequest, res: Respon
     const adminTransaction = new WalletTransaction({
       userId: req.user?.id,
       userEmail: admin.email.toLowerCase(),
+      userName: admin.name,
       type: "debit",
       amount: topupRequest.amount,
       description: `Wallet top-up approved for ${topupRequest.userName} via ${topupRequest.paymentMode}`,

@@ -47,4 +47,7 @@ const bookingSchema = new mongoose.Schema(
   }
 );
 
+bookingSchema.index({ userEmail: 1, createdAt: -1 });
+bookingSchema.index({ createdAt: -1 });
+
 export default mongoose.model("Booking", bookingSchema);

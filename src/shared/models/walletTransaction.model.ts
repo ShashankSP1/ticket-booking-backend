@@ -13,6 +13,10 @@ const walletTransactionSchema = new mongoose.Schema(
       lowercase: true,
       index: true,
     },
+    userName: {
+      type: String,
+      required: true,
+    },
     type: {
       type: String,
       enum: ["credit", "debit"],

@@ -23,6 +23,25 @@ const toEventDate = (date: unknown, time: unknown): Date | null => {
 	return null;
 };
 
+const isValidHHmm = (value: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+
+const toEventResponse = (event: any) => ({
+	id: event._id?.toString(),
+	name: event.name,
+	description: event.description,
+	date: event.date,
+	time: event.time,
+	venue: event.venue,
+	price: event.price,
+	capacity: event.capacity,
+	ticketsSold: event.ticketsSold,
+	image: event.image,
+	createdBy: event.createdBy,
+	isActive: event.isActive,
+	createdAt: event.createdAt,
+	updatedAt: event.updatedAt,
+});
+
 // Get all active events (for listing)
 export const getAllEvents = async (req: Request, res: Response): Promise<void> => {
 	try {
@@ -51,12 +70,13 @@ export const getAllEvents = async (req: Request, res: Response): Promise<void> =
 
 		const events = await Event.find(query)
 			.sort(sortOptions)
-			.select("name description date time venue price capacity ticketsSold image createdAt");
+			.select("name description date time venue price capacity ticketsSold image createdBy isActive createdAt updatedAt")
+			.lean();
 
 		res.status(200).json({
 			message: "Events retrieved successfully",
 			count: events.length,
-			events,
+			events: events.map(toEventResponse),
 		});
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
@@ -70,7 +90,8 @@ export const getEventById = async (req: Request, res: Response): Promise<void> =
 
 		const event = await Event.findById(eventId)
 			.select("name description date time venue price capacity ticketsSold image createdBy isActive")
-			.populate("createdBy", "name email");
+			.populate("createdBy", "name email")
+			.lean();
 
 		if (!event) {
 			res.status(404).json({ message: "Event not found" });
@@ -79,7 +100,7 @@ export const getEventById = async (req: Request, res: Response): Promise<void> =
 
 		res.status(200).json({
 			message: "Event retrieved successfully",
-			event,
+			event: toEventResponse(event),
 		});
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
@@ -131,14 +152,19 @@ export const createEvent = async (
 			return;
 		}
 
+		if (typeof time !== "string" || !isValidHHmm(time)) {
+			res.status(400).json({ message: "Time must be valid HH:mm format" });
+			return;
+		}
+
 		if (normalizedDate.getTime() < Date.now()) {
 			res.status(400).json({ message: "Event date must be in the future" });
 			return;
 		}
 
-		if (price < 0 || capacity < 1) {
+		if (price <= 0 || capacity < 1) {
 			res.status(400).json({
-				message: "Price must be non-negative and capacity must be at least 1",
+				message: "Price must be greater than 0 and capacity must be at least 1",
 			});
 			return;
 		}
@@ -157,7 +183,7 @@ export const createEvent = async (
 
 		res.status(201).json({
 			message: "Event created successfully",
-			event,
+			event: toEventResponse(event),
 		});
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
@@ -227,7 +253,7 @@ export const updateEvent = async (
 
 		res.status(200).json({
 			message: "Event updated successfully",
-			event: updatedEvent,
+			event: toEventResponse(updatedEvent),
 		});
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });

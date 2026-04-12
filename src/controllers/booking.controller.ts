@@ -122,6 +122,11 @@ export const createBooking = async (
 			return;
 		}
 
+		if (!Number.isFinite(resolvedTotalAmount) || resolvedTotalAmount <= 0) {
+			res.status(400).json({ message: "totalAmount must be greater than 0" });
+			return;
+		}
+
 		const booking = await Booking.create({
 			eventId,
 			eventName: resolvedEventName,

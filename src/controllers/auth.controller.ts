@@ -167,14 +167,30 @@ export const loginAdmin = async (req: Request, res: Response): Promise<void> => 
 // Admin signup — protected with ADMIN_SECRET env variable
 export const registerAdmin = async (req: Request, res: Response): Promise<void> => {
 	try {
-		const { name, email, password, adminSecret } = req.body;
+		const { name, email, password } = req.body;
+		const adminSecret =
+			req.body?.adminSecret ?? req.body?.admin_secret ?? req.body?.secretKey;
 
-		if (!name || !email || !password || !adminSecret) {
-			res.status(400).json({ message: "Name, email, password, and adminSecret are required" });
+		if (!name || !email || !password) {
+			res.status(400).json({ message: "Name, email, and password are required" });
 			return;
 		}
 
-		if (adminSecret !== process.env.ADMIN_SECRET) {
+		if (!adminSecret) {
+			res.status(400).json({
+				message:
+					"Admin signup requires adminSecret (accepted keys: adminSecret, admin_secret, secretKey)",
+			});
+			return;
+		}
+
+		const expectedAdminSecret = process.env.ADMIN_SECRET;
+		if (!expectedAdminSecret) {
+			res.status(500).json({ message: "ADMIN_SECRET is not configured on server" });
+			return;
+		}
+
+		if (String(adminSecret).trim() !== expectedAdminSecret.trim()) {
 			res.status(403).json({ message: "Invalid admin secret" });
 			return;
 		}

@@ -27,4 +27,12 @@ router.post("/login", (req, res) => {
 	return loginUser(req, res);
 });
 
+router.post("/signin", (req, res) => {
+	if (isAdminRole(req.body?.role)) {
+		return loginAdmin(req, res);
+	}
+
+	return loginUser(req, res);
+});
+
 export default router;

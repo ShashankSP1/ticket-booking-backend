@@ -20,8 +20,12 @@ app.use("/api/admin", adminRoutes);   // admin/signup, admin/login
 app.use("/api/events", eventRoutes);  // events listing, create, update
 app.use("/api/bookings", bookingRoutes); // bookings management
 
-app.use("/", (req, res) => {
-  res.send("Hello World");
+app.get("/", (_req, res) => {
+  res.status(200).json({ message: "Ticket booking backend is running" });
+});
+
+app.use((_req, res) => {
+  res.status(404).json({ message: "Route not found" });
 });
 
 export default app;

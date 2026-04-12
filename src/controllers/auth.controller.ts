@@ -26,7 +26,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 			password: hashedPassword,
 		});
 
-		const token = generateToken(user._id.toString());
+		const token = generateToken(user._id.toString(), "user");
 
 		res.status(201).json({
 			message: "User registered successfully",
@@ -36,6 +36,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 				name: user.name,
 				email: user.email,
 				role: user.role,
+				walletBalance: user.walletBalance,
 			},
 		});
 	} catch (error) {
@@ -64,7 +65,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 			return;
 		}
 
-		const token = generateToken(user._id.toString());
+		const token = generateToken(user._id.toString(), "user");
 
 		res.status(200).json({
 			message: "Login successful",
@@ -74,6 +75,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 				name: user.name,
 				email: user.email,
 				role: user.role,
+				walletBalance: user.walletBalance,
 			},
 		});
 	} catch (error) {
@@ -108,7 +110,7 @@ export const loginUserOnly = async (req: Request, res: Response): Promise<void> 
 			return;
 		}
 
-		const token = generateToken(user._id.toString());
+		const token = generateToken(user._id.toString(), "user");
 
 		res.status(200).json({
 			message: "Login successful",
@@ -118,6 +120,7 @@ export const loginUserOnly = async (req: Request, res: Response): Promise<void> 
 				name: user.name,
 				email: user.email,
 				role: user.role,
+				walletBalance: user.walletBalance,
 			},
 		});
 	} catch (error) {
@@ -128,7 +131,8 @@ export const loginUserOnly = async (req: Request, res: Response): Promise<void> 
 // Admin-only login — rejects non-admin accounts
 export const loginAdmin = async (req: Request, res: Response): Promise<void> => {
 	try {
-		const { email, password } = req.body;
+		const email = req.body?.email ?? req.body?.username ?? req.body?.createdBy;
+		const { password } = req.body;
 
 		if (!email || !password) {
 			res.status(400).json({ message: "Email and password are required" });
@@ -147,7 +151,7 @@ export const loginAdmin = async (req: Request, res: Response): Promise<void> => 
 			return;
 		}
 
-		const token = generateToken(admin._id.toString());
+		const token = generateToken(admin._id.toString(), "admin");
 
 		res.status(200).json({
 			message: "Admin login successful",
@@ -214,7 +218,7 @@ export const registerAdmin = async (req: Request, res: Response): Promise<void> 
 			password: hashedPassword,
 		});
 
-		const token = generateToken(admin._id.toString());
+		const token = generateToken(admin._id.toString(), "admin");
 
 		res.status(201).json({
 			message: "Admin registered successfully",

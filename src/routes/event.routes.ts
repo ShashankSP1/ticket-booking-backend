@@ -7,7 +7,7 @@ import {
 	updateEvent,
 	getAvailableTickets,
 } from "../controllers/event.controller";
-import { protect } from "../middleware/auth.middleware";
+import { protect, requireAdmin } from "../middleware/auth.middleware";
 
 const router = Router();
 
@@ -17,8 +17,8 @@ router.get("/:eventId", getEventById);
 router.get("/:eventId/available-tickets", getAvailableTickets);
 
 // Admin-only routes
-router.post("/", protect, createEvent);
-router.put("/:eventId", protect, updateEvent);
-router.delete("/:eventId", protect, deleteEvent);
+router.post("/", protect, requireAdmin, createEvent);
+router.put("/:eventId", protect, requireAdmin, updateEvent);
+router.delete("/:eventId", protect, requireAdmin, deleteEvent);
 
 export default router;

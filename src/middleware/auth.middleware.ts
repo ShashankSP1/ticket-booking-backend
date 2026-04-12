@@ -30,14 +30,39 @@ export const protect = (
 	try {
 		const decoded = jwt.verify(token, secret);
 
-		if (typeof decoded !== "object" || !decoded || !("id" in decoded)) {
+		if (
+			typeof decoded !== "object" ||
+			!decoded ||
+			!("id" in decoded) ||
+			!("role" in decoded) ||
+			typeof decoded.id !== "string" ||
+			(decoded.role !== "admin" && decoded.role !== "user")
+		) {
 			res.status(401).json({ message: "Not authorized, invalid token payload" });
 			return;
 		}
 
-		req.user = { id: decoded.id };
+		req.user = { id: decoded.id, role: decoded.role };
 		next();
 	} catch {
 		res.status(401).json({ message: "Not authorized, invalid token" });
 	}
+};
+
+export const requireAdmin = (
+	req: AuthenticatedRequest,
+	res: Response,
+	next: NextFunction
+): void => {
+	if (!req.user) {
+		res.status(401).json({ message: "Not authorized" });
+		return;
+	}
+
+	if (req.user.role !== "admin") {
+		res.status(403).json({ message: "Admin access required" });
+		return;
+	}
+
+	next();
 };

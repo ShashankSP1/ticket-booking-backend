@@ -3,6 +3,26 @@ import mongoose from "mongoose";
 import Event from "../shared/models/event.model";
 import { AuthenticatedRequest } from "../types/auth.types";
 
+const toEventDate = (date: unknown, time: unknown): Date | null => {
+	if (typeof date !== "string" || !date.trim()) {
+		return null;
+	}
+
+	if (typeof time === "string" && time.trim()) {
+		const combined = new Date(`${date} ${time}`);
+		if (!Number.isNaN(combined.getTime())) {
+			return combined;
+		}
+	}
+
+	const dateOnly = new Date(date);
+	if (!Number.isNaN(dateOnly.getTime())) {
+		return dateOnly;
+	}
+
+	return null;
+};
+
 // Get all active events (for listing)
 export const getAllEvents = async (req: Request, res: Response): Promise<void> => {
 	try {
@@ -31,7 +51,7 @@ export const getAllEvents = async (req: Request, res: Response): Promise<void> =
 
 		const events = await Event.find(query)
 			.sort(sortOptions)
-			.select("name description date venue price capacity ticketsSold image createdAt");
+			.select("name description date time venue price capacity ticketsSold image createdAt");
 
 		res.status(200).json({
 			message: "Events retrieved successfully",
@@ -48,7 +68,9 @@ export const getEventById = async (req: Request, res: Response): Promise<void> =
 	try {
 		const { eventId } = req.params;
 
-		const event = await Event.findById(eventId).populate("createdBy", "name email");
+		const event = await Event.findById(eventId)
+			.select("name description date time venue price capacity ticketsSold image createdBy isActive")
+			.populate("createdBy", "name email");
 
 		if (!event) {
 			res.status(404).json({ message: "Event not found" });
@@ -83,7 +105,16 @@ export const createEvent = async (
 
 		const creatorId = new mongoose.Types.ObjectId(userId);
 
-		const { name, description, date, venue, price, capacity = 100, image } = req.body;
+		const {
+			name,
+			description,
+			date,
+			time,
+			venue,
+			price,
+			capacity = 100,
+			image,
+		} = req.body;
 
 		if (!name || !date || !venue || !price) {
 			res.status(400).json({
@@ -92,7 +123,15 @@ export const createEvent = async (
 			return;
 		}
 
-		if (new Date(date) < new Date()) {
+		const normalizedDate = toEventDate(date, time);
+		if (!normalizedDate) {
+			res.status(400).json({
+				message: "Invalid date/time. Use date as YYYY-MM-DD and time like 06:00 PM",
+			});
+			return;
+		}
+
+		if (normalizedDate.getTime() < Date.now()) {
 			res.status(400).json({ message: "Event date must be in the future" });
 			return;
 		}
@@ -107,7 +146,8 @@ export const createEvent = async (
 		const event = await Event.create({
 			name,
 			description,
-			date,
+			date: normalizedDate,
+			time,
 			venue,
 			price,
 			capacity,
@@ -137,7 +177,8 @@ export const updateEvent = async (
 		}
 
 		const { eventId } = req.params;
-		const { name, description, date, venue, price, capacity, image, isActive } = req.body;
+		const { name, description, date, time, venue, price, capacity, image, isActive } =
+			req.body;
 
 		const event = await Event.findById(eventId);
 		if (!event) {
@@ -150,9 +191,22 @@ export const updateEvent = async (
 			return;
 		}
 
-		if (date && new Date(date) < new Date()) {
-			res.status(400).json({ message: "Event date must be in the future" });
-			return;
+		let normalizedDate: Date | undefined;
+		if (date || time) {
+			const fallbackDate = new Date(event.date).toISOString().slice(0, 10);
+			normalizedDate = toEventDate(date ?? fallbackDate, time) ?? undefined;
+
+			if (!normalizedDate) {
+				res.status(400).json({
+					message: "Invalid date/time. Use date as YYYY-MM-DD and time like 06:00 PM",
+				});
+				return;
+			}
+
+			if (normalizedDate.getTime() < Date.now()) {
+				res.status(400).json({ message: "Event date must be in the future" });
+				return;
+			}
 		}
 
 		const updatedEvent = await Event.findByIdAndUpdate(
@@ -160,7 +214,8 @@ export const updateEvent = async (
 			{
 				name: name || event.name,
 				description: description || event.description,
-				date: date || event.date,
+				date: normalizedDate || event.date,
+				time: time || event.time,
 				venue: venue || event.venue,
 				price: price !== undefined ? price : event.price,
 				capacity: capacity || event.capacity,

@@ -2,6 +2,7 @@
 import Booking from "../shared/models/booking.model";
 import Event from "../shared/models/event.model";
 import { AuthenticatedRequest } from "../types/auth.types";
+import User from "../shared/models/user.model";
 
 // POST /api/bookings — Create a booking (User)
 export const createBooking = async (
@@ -9,6 +10,15 @@ export const createBooking = async (
 	res: Response
 ): Promise<void> => {
 	try {
+		if (!req.user?.id) {
+			res.status(401).json({ message: "Not authorized" });
+			return;
+		}
+
+		const loggedInUser = (await User.findById(req.user.id)
+			.select("name email role")
+			.lean()) as { name: string; email: string; role: "user" | "admin" } | null;
+
 		const {
 			eventId,
 			eventName,
@@ -25,8 +35,6 @@ export const createBooking = async (
 			!eventName ||
 			!eventDate ||
 			!eventTime ||
-			!userEmail ||
-			!userName ||
 			!tickets ||
 			!totalAmount
 		) {
@@ -46,13 +54,24 @@ export const createBooking = async (
 			}).catch(() => null);
 		}
 
+		const resolvedUserEmail = (
+			loggedInUser?.role === "user" ? loggedInUser.email : userEmail
+		)?.toLowerCase().trim();
+		const resolvedUserName =
+			loggedInUser?.role === "user" ? loggedInUser.name : userName;
+
+		if (!resolvedUserEmail || !resolvedUserName) {
+			res.status(400).json({ message: "User name and email are required" });
+			return;
+		}
+
 		const booking = await Booking.create({
 			eventId,
 			eventName,
 			eventDate,
 			eventTime,
-			userEmail,
-			userName,
+			userEmail: resolvedUserEmail,
+			userName: resolvedUserName,
 			tickets: Number(tickets),
 			totalAmount: Number(totalAmount),
 			status: "confirmed",
@@ -80,19 +99,29 @@ export const getAllBookings = async (
 
 // GET /api/bookings/user/:email — Booking history for a specific user
 export const getBookingsByUser = async (
-	req: Request,
+	req: AuthenticatedRequest,
 	res: Response
 ): Promise<void> => {
 	try {
 		const rawEmail = req.params.email;
-		const email = Array.isArray(rawEmail) ? rawEmail[0] : rawEmail;
+		let email = Array.isArray(rawEmail) ? rawEmail[0] : rawEmail;
+
+		if (req.user?.role === "user" && req.user.id) {
+			const currentUser = (await User.findById(req.user.id)
+				.select("email")
+				.lean()) as { email: string } | null;
+
+			email = currentUser?.email;
+		}
 
 		if (!email) {
 			res.status(400).json({ message: "Email is required" });
 			return;
 		}
 
-		const bookings = await Booking.find({ userEmail: decodeURIComponent(email) }).sort({
+		const bookings = await Booking.find({
+			userEmail: decodeURIComponent(email).toLowerCase().trim(),
+		}).sort({
 			createdAt: -1,
 		});
 
@@ -113,15 +142,18 @@ export const getUserBookings = async (
 			return;
 		}
 
-		const User = (await import("../shared/models/user.model")).default;
-		const user = await User.findById(req.user.id).select("email").lean() as { email: string } | null;
+		const user = (await User.findById(req.user.id)
+			.select("email")
+			.lean()) as { email: string } | null;
 
 		if (!user) {
 			res.status(404).json({ message: "User not found" });
 			return;
 		}
 
-		const bookings = await Booking.find({ userEmail: user.email }).sort({ createdAt: -1 });
+		const bookings = await Booking.find({
+			userEmail: user.email.toLowerCase().trim(),
+		}).sort({ createdAt: -1 });
 		res.status(200).json({ bookings });
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });

@@ -4,6 +4,20 @@ import Event from "../shared/models/event.model";
 import { AuthenticatedRequest } from "../types/auth.types";
 import User from "../shared/models/user.model";
 
+const toBookingResponse = (booking: any) => ({
+	id: booking._id?.toString(),
+	eventId: booking.eventId,
+	eventName: booking.eventName,
+	eventDate: booking.eventDate,
+	eventTime: booking.eventTime,
+	userEmail: booking.userEmail,
+	userName: booking.userName,
+	tickets: booking.tickets,
+	totalAmount: booking.totalAmount,
+	status: booking.status,
+	createdAt: booking.createdAt,
+});
+
 // POST /api/bookings — Create a booking (User)
 export const createBooking = async (
 	req: AuthenticatedRequest,
@@ -121,7 +135,7 @@ export const createBooking = async (
 			createdAt: new Date(),
 		});
 
-		res.status(201).json(booking);
+		res.status(201).json(toBookingResponse(booking));
 	} catch (error) {
 		res.status(500).json({ message: "Failed to create booking", error });
 	}
@@ -133,8 +147,8 @@ export const getAllBookings = async (
 	res: Response
 ): Promise<void> => {
 	try {
-		const bookings = await Booking.find().sort({ createdAt: -1 });
-		res.status(200).json({ bookings });
+		const bookings = await Booking.find().sort({ createdAt: -1 }).lean();
+		res.status(200).json({ bookings: bookings.map(toBookingResponse) });
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
 	}
@@ -164,11 +178,13 @@ export const getBookingsByUser = async (
 
 		const bookings = await Booking.find({
 			userEmail: decodeURIComponent(email).toLowerCase().trim(),
-		}).sort({
+		})
+			.sort({
 			createdAt: -1,
-		});
+			})
+			.lean();
 
-		res.status(200).json({ bookings });
+		res.status(200).json({ bookings: bookings.map(toBookingResponse) });
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
 	}
@@ -196,8 +212,10 @@ export const getUserBookings = async (
 
 		const bookings = await Booking.find({
 			userEmail: user.email.toLowerCase().trim(),
-		}).sort({ createdAt: -1 });
-		res.status(200).json({ bookings });
+		})
+			.sort({ createdAt: -1 })
+			.lean();
+		res.status(200).json({ bookings: bookings.map(toBookingResponse) });
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
 	}
@@ -232,7 +250,10 @@ export const cancelBooking = async (
 			}).catch(() => null);
 		}
 
-		res.status(200).json({ message: "Booking cancelled successfully", booking });
+		res.status(200).json({
+			message: "Booking cancelled successfully",
+			booking: toBookingResponse(booking),
+		});
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
 	}

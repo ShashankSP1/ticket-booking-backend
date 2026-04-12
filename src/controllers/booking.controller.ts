@@ -19,6 +19,11 @@ export const createBooking = async (
 			.select("name email role")
 			.lean()) as { name: string; email: string; role: "user" | "admin" } | null;
 
+		if (!loggedInUser) {
+			res.status(404).json({ message: "User not found" });
+			return;
+		}
+
 		const {
 			eventId,
 			eventName,
@@ -30,28 +35,51 @@ export const createBooking = async (
 			totalAmount,
 		} = req.body;
 
-		if (
-			!eventId ||
-			!eventName ||
-			!eventDate ||
-			!eventTime ||
-			!tickets ||
-			!totalAmount
-		) {
-			res.status(400).json({ message: "All booking fields are required" });
+		if (!eventId || !tickets) {
+			res.status(400).json({ message: "eventId and tickets are required" });
 			return;
 		}
 
-		if (Number(tickets) < 1) {
+		const ticketCount = Number(tickets);
+		if (!Number.isFinite(ticketCount) || ticketCount < 1) {
 			res.status(400).json({ message: "Tickets must be at least 1" });
 			return;
 		}
 
-		// Decrement available tickets on the Event document if ObjectId is valid
+		let eventDoc: {
+			name: string;
+			date: Date;
+			time?: string;
+			price: number;
+			capacity: number;
+			ticketsSold: number;
+		} | null = null;
+
 		if (String(eventId).length === 24) {
-			await Event.findByIdAndUpdate(eventId, {
-				$inc: { ticketsSold: Number(tickets) },
-			}).catch(() => null);
+			eventDoc = (await Event.findById(eventId)
+				.select("name date time price capacity ticketsSold")
+				.lean()) as {
+				name: string;
+				date: Date;
+				time?: string;
+				price: number;
+				capacity: number;
+				ticketsSold: number;
+			} | null;
+
+			if (eventDoc) {
+				const available = eventDoc.capacity - eventDoc.ticketsSold;
+				if (available < ticketCount) {
+					res.status(400).json({
+						message: `Only ${available} tickets available`,
+					});
+					return;
+				}
+
+				await Event.findByIdAndUpdate(eventId, {
+					$inc: { ticketsSold: ticketCount },
+				});
+			}
 		}
 
 		const resolvedUserEmail = (
@@ -65,15 +93,30 @@ export const createBooking = async (
 			return;
 		}
 
+		const resolvedEventName = eventName ?? eventDoc?.name;
+		const resolvedEventDate =
+			eventDate ?? (eventDoc?.date ? new Date(eventDoc.date).toISOString().slice(0, 10) : undefined);
+		const resolvedEventTime = eventTime ?? eventDoc?.time ?? "TBD";
+		const resolvedTotalAmount =
+			totalAmount !== undefined ? Number(totalAmount) : eventDoc ? eventDoc.price * ticketCount : undefined;
+
+		if (!resolvedEventName || !resolvedEventDate || resolvedTotalAmount === undefined) {
+			res.status(400).json({
+				message:
+					"Missing event details. Send eventName, eventDate, totalAmount or provide a valid eventId.",
+			});
+			return;
+		}
+
 		const booking = await Booking.create({
 			eventId,
-			eventName,
-			eventDate,
-			eventTime,
+			eventName: resolvedEventName,
+			eventDate: resolvedEventDate,
+			eventTime: resolvedEventTime,
 			userEmail: resolvedUserEmail,
 			userName: resolvedUserName,
-			tickets: Number(tickets),
-			totalAmount: Number(totalAmount),
+			tickets: ticketCount,
+			totalAmount: resolvedTotalAmount,
 			status: "confirmed",
 			createdAt: new Date(),
 		});

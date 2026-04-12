@@ -5,15 +5,19 @@ import WalletTransaction from "../shared/models/walletTransaction.model";
 import User from "../shared/models/user.model";
 import { AuthenticatedRequest } from "../types/auth.types";
 import mongoose from "mongoose";
+import { uploadReceiptToCloudinary } from "../config/cloudinary";
 
 // Create wallet topup request
 export const createTopupRequest = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { amount, paymentMode, declarationAccepted } = req.body;
     const file = (req as any).file;
+    const parsedAmount = Number(amount);
+    const declarationAcceptedBool =
+      declarationAccepted === true || declarationAccepted === "true";
 
     // Validation
-    if (!amount || amount <= 0 || amount > 100000) {
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || parsedAmount > 100000) {
       return res.status(400).json({ error: "Invalid amount. Must be between 1 and 100000" });
     }
 
@@ -21,12 +25,20 @@ export const createTopupRequest = async (req: AuthenticatedRequest, res: Respons
       return res.status(400).json({ error: "Invalid payment mode" });
     }
 
-    if (!declarationAccepted || declarationAccepted !== true) {
+    if (!declarationAcceptedBool) {
       return res.status(400).json({ error: "Declaration must be accepted" });
     }
 
     if (!file) {
       return res.status(400).json({ error: "Receipt file is required" });
+    }
+
+    let receiptUrl = `/uploads/receipts/${file.filename}`;
+    let receiptPublicId: string | undefined;
+    const cloudinaryResult = await uploadReceiptToCloudinary(file.path);
+    if (cloudinaryResult) {
+      receiptUrl = cloudinaryResult.url;
+      receiptPublicId = cloudinaryResult.publicId;
     }
 
     const user = await User.findById(req.user?.id);
@@ -39,19 +51,25 @@ export const createTopupRequest = async (req: AuthenticatedRequest, res: Respons
       userId: req.user?.id,
       userEmail: user.email.toLowerCase(),
       userName: user.name,
-      amount,
+      amount: parsedAmount,
       paymentMode,
-      receiptUrl: file.path, // Store local file path
-      declarationAccepted,
+      receiptUrl,
+      receiptPublicId,
+      declarationAccepted: declarationAcceptedBool,
       status: "pending",
     });
 
     await topupRequest.save();
 
     return res.status(201).json({
-      message: "Top-up request created successfully",
-      requestId: topupRequest._id,
+      id: topupRequest._id,
+      userEmail: topupRequest.userEmail,
+      userName: topupRequest.userName,
+      amount: topupRequest.amount,
+      paymentMode: topupRequest.paymentMode,
+      receiptUrl: topupRequest.receiptUrl,
       status: "pending",
+      createdAt: topupRequest.createdAt,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -115,7 +133,6 @@ export const getWalletBalance = async (req: AuthenticatedRequest, res: Response)
 
     return res.status(200).json({
       balance: wallet.balance,
-      email: wallet.userEmail,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -298,10 +315,9 @@ export const approveTopupRequest = async (req: AuthenticatedRequest, res: Respon
     await session.commitTransaction();
 
     return res.status(200).json({
-      message: "Top-up approved successfully",
+      message: "Top-up approved",
       requestId: topupRequest._id,
-      newBalance: wallet.balance,
-      amount: topupRequest.amount,
+      newBalance: adminWallet.balance,
     });
   } catch (error: any) {
     await session.abortTransaction();

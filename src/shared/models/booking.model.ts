@@ -21,7 +21,6 @@ const bookingSchema = new mongoose.Schema(
     reservationId: {
       type: String,
       default: null,
-      index: true,
     },
     userId: {
       type: mongoose.Schema.Types.ObjectId,

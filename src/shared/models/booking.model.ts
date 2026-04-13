@@ -18,6 +18,11 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    reservationId: {
+      type: String,
+      default: null,
+      index: true,
+    },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -58,5 +63,6 @@ const bookingSchema = new mongoose.Schema(
 
 bookingSchema.index({ userEmail: 1, createdAt: -1 });
 bookingSchema.index({ createdAt: -1 });
+bookingSchema.index({ reservationId: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model("Booking", bookingSchema);

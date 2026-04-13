@@ -12,6 +12,7 @@ import User from "../shared/models/user.model";
 const toBookingResponse = (booking: any) => ({
 	id: booking._id?.toString(),
 	eventId: booking.eventId,
+	reservationId: booking.reservationId,
 	eventName: booking.eventName,
 	eventDate: booking.eventDate,
 	eventTime: booking.eventTime,
@@ -374,6 +375,13 @@ export const confirmBooking = async (
 			return;
 		}
 
+		const existingBooking = await Booking.findOne({ reservationId }).session(session);
+		if (existingBooking) {
+			await session.abortTransaction();
+			res.status(200).json(toBookingResponse(existingBooking));
+			return;
+		}
+
 		const amount = Number(totalAmount);
 		if (!Number.isFinite(amount) || amount <= 0) {
 			await session.abortTransaction();
@@ -395,6 +403,12 @@ export const confirmBooking = async (
 			return;
 		}
 
+		if (String(reservation.eventId) !== String(eventId)) {
+			await session.abortTransaction();
+			res.status(400).json({ message: "Reservation does not match eventId" });
+			return;
+		}
+
 		if (reservation.expiresAt < new Date()) {
 			await session.abortTransaction();
 			res.status(400).json({ message: "Reservation has expired. Please select seats again." });
@@ -403,6 +417,23 @@ export const confirmBooking = async (
 
 		// 2. Verify all seats still reserved by this user
 		const requestedSeats = Array.isArray(seatNumbers) ? seatNumbers : [];
+		if (requestedSeats.length === 0) {
+			await session.abortTransaction();
+			res.status(400).json({ message: "seatNumbers must be a non-empty array" });
+			return;
+		}
+
+		const reservationSeatSet = new Set(reservation.seatNumbers);
+		const isSeatMismatch =
+			requestedSeats.length !== reservation.seatNumbers.length ||
+			requestedSeats.some((seat: string) => !reservationSeatSet.has(seat));
+
+		if (isSeatMismatch) {
+			await session.abortTransaction();
+			res.status(400).json({ message: "seatNumbers do not match reservation" });
+			return;
+		}
+
 		const seats = await Seat.find({
 			eventId: reservation.eventId,
 			seatNumber: { $in: requestedSeats },
@@ -424,21 +455,18 @@ export const confirmBooking = async (
 			return;
 		}
 
-		// 4. Check wallet balance
-		let wallet = await Wallet.findOne({ userEmail: user.email.toLowerCase() }).session(session);
-		const currentBalance = wallet ? wallet.balance : 0;
-		if (currentBalance < amount) {
+		// 4/5. Atomically debit wallet with balance guard (race-safe)
+		const wallet = await Wallet.findOneAndUpdate(
+			{ userEmail: user.email.toLowerCase(), balance: { $gte: amount } },
+			{ $inc: { balance: -amount } },
+			{ new: true, session }
+		);
+
+		if (!wallet) {
 			await session.abortTransaction();
 			res.status(400).json({ message: "Insufficient wallet balance" });
 			return;
 		}
-
-		// 5. Deduct wallet
-		if (!wallet) {
-			wallet = new Wallet({ userId: user._id, userEmail: user.email.toLowerCase(), balance: 0 });
-		}
-		wallet.balance -= amount;
-		await wallet.save({ session });
 
 		// 6. Create debit transaction
 		await WalletTransaction.create(
@@ -467,6 +495,18 @@ export const confirmBooking = async (
 			{ session }
 		);
 
+		const bookedSeatsResult = await Seat.countDocuments({
+			eventId: reservation.eventId,
+			seatNumber: { $in: requestedSeats },
+			state: "booked",
+		}).session(session);
+
+		if (bookedSeatsResult !== requestedSeats.length) {
+			await session.abortTransaction();
+			res.status(409).json({ message: "Seats no longer available" });
+			return;
+		}
+
 		// 8. Determine event details (fallback to Event doc if not provided)
 		let resolvedEventName = eventName;
 		let resolvedEventDate = eventDate;
@@ -485,6 +525,7 @@ export const confirmBooking = async (
 		const [booking] = await Booking.create(
 			[{
 				eventId: String(eventId),
+				reservationId: String(reservationId),
 				eventName: resolvedEventName ?? "Unknown Event",
 				eventDate: resolvedEventDate ?? "",
 				eventTime: resolvedEventTime ?? "TBD",

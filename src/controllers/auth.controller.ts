@@ -19,7 +19,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 			return;
 		}
 
-		const hashedPassword = await bcrypt.hash(password, 10);
+		const hashedPassword = await bcrypt.hash(password, 12);
 		const user = await User.create({
 			name,
 			email,
@@ -211,7 +211,7 @@ export const registerAdmin = async (req: Request, res: Response): Promise<void> 
 			return;
 		}
 
-		const hashedPassword = await bcrypt.hash(password, 10);
+		const hashedPassword = await bcrypt.hash(password, 12);
 		const admin = await Admin.create({
 			name,
 			email,

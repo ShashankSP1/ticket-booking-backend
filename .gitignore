@@ -1,3 +1,4 @@
 node_modules
 .env
 dist
+ticketbooking.postman_collection.json

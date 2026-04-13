@@ -210,7 +210,7 @@ export const getAllTopupRequests = async (req: AuthenticatedRequest, res: Respon
   }
 };
 
-// Approve topup request (atomic transaction)
+// Approve topup request (atomic + idempotent)
 export const approveTopupRequest = async (req: AuthenticatedRequest, res: Response) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -219,109 +219,67 @@ export const approveTopupRequest = async (req: AuthenticatedRequest, res: Respon
     const { id } = req.params;
     const { adminRemarks = "" } = req.body;
 
-    // Find the topup request
-    const topupRequest = await WalletTopupRequest.findById(id).session(session);
+    // Atomically claim the request — only if still pending (prevents double-approval race)
+    const topupRequest = await WalletTopupRequest.findOneAndUpdate(
+      { _id: id, status: "pending" },
+      {
+        $set: {
+          status: "approved",
+          adminId: req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : undefined,
+          adminRemarks,
+          resolvedAt: new Date(),
+        },
+      },
+      { new: true, session }
+    );
 
     if (!topupRequest) {
+      // Either not found or already processed
       await session.abortTransaction();
-      return res.status(404).json({ error: "Top-up request not found" });
+      const existing = await WalletTopupRequest.findById(id).lean();
+      if (!existing) {
+        return res.status(404).json({ error: "Top-up request not found" });
+      }
+      return res.status(409).json({ error: `Request already ${(existing as any).status}. Cannot approve.` });
     }
 
-    // Check if already resolved
-    if (topupRequest.status !== "pending") {
-      await session.abortTransaction();
-      return res.status(409).json({ 
-        error: `Request already ${topupRequest.status}. Cannot approve.` 
-      });
-    }
-
-    // Get or create user's wallet
-    let wallet = await Wallet.findOne({ userEmail: topupRequest.userEmail }).session(session);
+    // Credit user's wallet
+    let wallet = await Wallet.findOneAndUpdate(
+      { userEmail: topupRequest.userEmail },
+      { $inc: { balance: topupRequest.amount } },
+      { new: true, session }
+    );
 
     if (!wallet) {
-      wallet = new Wallet({
+      // Create wallet if absent
+      const created = await Wallet.create(
+        [{ userId: topupRequest.userId, userEmail: topupRequest.userEmail, balance: topupRequest.amount }],
+        { session }
+      );
+      wallet = created[0] ?? null;
+    }
+
+    // Create credit transaction for user
+    await WalletTransaction.create(
+      [{
         userId: topupRequest.userId,
         userEmail: topupRequest.userEmail,
-        balance: topupRequest.amount,
-      });
-    } else {
-      wallet.balance += topupRequest.amount;
-    }
-
-    await wallet.save({ session });
-
-    // Get or create admin's wallet (for debit)
-    const admin = await User.findById(req.user?.id).session(session);
-    if (!admin) {
-      await session.abortTransaction();
-      return res.status(404).json({ error: "Admin not found" });
-    }
-
-    let adminWallet = await Wallet.findOne({ userEmail: admin.email.toLowerCase() }).session(session);
-
-    if (!adminWallet) {
-      adminWallet = new Wallet({
-        userId: req.user?.id,
-        userEmail: admin.email.toLowerCase(),
-        balance: 0,
-      });
-    }
-
-    // Check if admin has sufficient balance
-    if (adminWallet.balance < topupRequest.amount) {
-      await session.abortTransaction();
-      return res.status(400).json({ 
-        error: "Insufficient admin wallet balance to approve this request" 
-      });
-    }
-
-    adminWallet.balance -= topupRequest.amount;
-    await adminWallet.save({ session });
-
-    // Create wallet transaction for user (credit)
-    const userTransaction = new WalletTransaction({
-      userId: topupRequest.userId,
-      userEmail: topupRequest.userEmail,
-      userName: topupRequest.userName,
-      type: "credit",
-      amount: topupRequest.amount,
-      description: `Wallet top-up approved via ${topupRequest.paymentMode}`,
-      referenceType: "TOPUP_REQUEST",
-      referenceId: topupRequest._id.toString(),
-    });
-
-    await userTransaction.save({ session });
-
-    // Create wallet transaction for admin (debit)
-    const adminTransaction = new WalletTransaction({
-      userId: req.user?.id,
-      userEmail: admin.email.toLowerCase(),
-      userName: admin.name,
-      type: "debit",
-      amount: topupRequest.amount,
-      description: `Wallet top-up approved for ${topupRequest.userName} via ${topupRequest.paymentMode}`,
-      referenceType: "TOPUP_REQUEST",
-      referenceId: topupRequest._id.toString(),
-    });
-
-    await adminTransaction.save({ session });
-
-    // Update topup request status
-    topupRequest.status = "approved";
-    if (req.user?.id) {
-      topupRequest.adminId = new mongoose.Types.ObjectId(req.user.id);
-    }
-    topupRequest.adminRemarks = adminRemarks;
-    topupRequest.resolvedAt = new Date();
-
-    await topupRequest.save({ session });
+        userName: topupRequest.userName,
+        type: "credit",
+        amount: topupRequest.amount,
+        description: `Wallet top-up approved via ${topupRequest.paymentMode}`,
+        referenceType: "TOPUP_REQUEST",
+        referenceId: topupRequest._id.toString(),
+      }],
+      { session }
+    );
 
     await session.commitTransaction();
 
     return res.status(200).json({
       message: "Top-up approved",
       requestId: topupRequest._id,
-      newBalance: adminWallet.balance,
+      newBalance: wallet?.balance ?? 0,
     });
   } catch (error: any) {
     await session.abortTransaction();
@@ -331,33 +289,32 @@ export const approveTopupRequest = async (req: AuthenticatedRequest, res: Respon
   }
 };
 
-// Reject topup request
+// Reject topup request (atomic)
 export const rejectTopupRequest = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
     const { adminRemarks = "" } = req.body;
 
-    const topupRequest = await WalletTopupRequest.findById(id);
+    const topupRequest = await WalletTopupRequest.findOneAndUpdate(
+      { _id: id, status: "pending" },
+      {
+        $set: {
+          status: "rejected",
+          adminId: req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : undefined,
+          adminRemarks,
+          resolvedAt: new Date(),
+        },
+      },
+      { new: true }
+    );
 
     if (!topupRequest) {
-      return res.status(404).json({ error: "Top-up request not found" });
+      const existing = await WalletTopupRequest.findById(id).lean();
+      if (!existing) {
+        return res.status(404).json({ error: "Top-up request not found" });
+      }
+      return res.status(409).json({ error: `Request already ${(existing as any).status}. Cannot reject.` });
     }
-
-    // Check if already resolved
-    if (topupRequest.status !== "pending") {
-      return res.status(409).json({ 
-        error: `Request already ${topupRequest.status}. Cannot reject.` 
-      });
-    }
-
-    topupRequest.status = "rejected";
-    if (req.user?.id) {
-      topupRequest.adminId = new mongoose.Types.ObjectId(req.user.id);
-    }
-    topupRequest.adminRemarks = adminRemarks;
-    topupRequest.resolvedAt = new Date();
-
-    await topupRequest.save();
 
     return res.status(200).json({
       message: "Top-up request rejected",

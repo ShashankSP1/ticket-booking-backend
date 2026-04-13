@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import Event from "../shared/models/event.model";
+import Seat from "../shared/models/seat.model";
 import { AuthenticatedRequest } from "../types/auth.types";
 
 const toEventDate = (date: unknown, time: unknown): Date | null => {
@@ -286,6 +287,9 @@ export const deleteEvent = async (
 		}
 
 		await Event.findByIdAndDelete(eventId);
+
+		// Delete all associated seats
+		await Seat.deleteMany({ eventId: new mongoose.Types.ObjectId(eventId as string) });
 
 		res.status(200).json({
 			message: "Event deleted successfully",

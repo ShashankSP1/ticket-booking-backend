@@ -18,6 +18,11 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     userEmail: {
       type: String,
       required: true,
@@ -34,6 +39,10 @@ const bookingSchema = new mongoose.Schema(
     totalAmount: {
       type: Number,
       required: true,
+    },
+    seatNumbers: {
+      type: [String],
+      default: [],
     },
     status: {
       type: String,

@@ -1,0 +1,273 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["ticketbooking"]
+}
+
+// ==================== USER ==================== //
+model User {
+  id               Int                  @id @default(autoincrement())
+  name             String
+  email            String               @unique
+  password         String
+  role             UserRole             @default(USER)
+  walletBalance    Float                @default(1000)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  // Relations
+  bookings         Booking[]
+  reservations     Reservation[]
+  wallet           Wallet?
+  walletTransactions WalletTransaction[]
+  walletTopupRequests WalletTopupRequest[]
+  createdTopupRequests WalletTopupRequest[] @relation("AdminRelation")
+  reservedSeats    Seat[]                  @relation("ReservedSeats")
+
+  @@schema("ticketbooking")
+}
+
+// ==================== ADMIN ==================== //
+model Admin {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("admin")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  events    Event[]
+
+  @@schema("ticketbooking")
+}
+
+// ==================== EVENT ==================== //
+model Event {
+  id           Int          @id @default(autoincrement())
+  name         String
+  description  String?
+  date         DateTime
+  time         String?
+  venue        String
+  price        Float
+  capacity     Int
+  ticketsSold  Int          @default(0)
+  image        String?
+  isActive     Boolean      @default(true)
+  createdBy    Int
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  // Relations
+  admin        Admin        @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  bookings     Booking[]
+  reservations Reservation[]
+  seats        Seat[]
+
+  @@schema("ticketbooking")
+  @@index([createdAt])
+  @@index([isActive])
+}
+
+// ==================== SEAT ==================== //
+model Seat {
+  id           Int          @id @default(autoincrement())
+  eventId      Int
+  seatNumber   String
+  row          String
+  col          Int
+  state        SeatState    @default(AVAILABLE)
+  reservedBy   Int?
+  reservedUntil DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  // Relations
+  event        Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user         User?        @relation("ReservedSeats", fields: [reservedBy], references: [id], onDelete: SetNull)
+
+  @@schema("ticketbooking")
+  @@unique([eventId, seatNumber])
+  @@index([state])
+  @@index([eventId])
+}
+
+// ==================== RESERVATION ==================== //
+model Reservation {
+  id           Int          @id @default(autoincrement())
+  eventId      Int
+  userId       Int
+  seatNumbers  String[]
+  expiresAt    DateTime
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  // Relations
+  event        Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("ticketbooking")
+  @@index([expiresAt])
+  @@index([userId])
+  @@index([eventId])
+}
+
+// ==================== BOOKING ==================== //
+model Booking {
+  id            Int           @id @default(autoincrement())
+  eventId       Int
+  eventName     String
+  eventDate     String
+  eventTime     String
+  reservationId Int?          @unique
+  userId        Int?
+  userEmail     String
+  userName      String
+  tickets       Int
+  totalAmount   Float
+  seatNumbers   String[]
+  status        BookingStatus @default(CONFIRMED)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // Relations
+  user          User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  event         Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@schema("ticketbooking")
+  @@index([userId])
+  @@index([eventId])
+  @@index([status])
+}
+
+// ==================== WALLET ==================== //
+model Wallet {
+  id            Int       @id @default(autoincrement())
+  userId        Int       @unique
+  userEmail     String    @unique
+  balance       Float     @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("ticketbooking")
+}
+
+// ==================== WALLET TRANSACTION ==================== //
+model WalletTransaction {
+  id              Int                 @id @default(autoincrement())
+  userId          Int
+  userEmail       String
+  userName        String
+  type            WalletTransactionType
+  amount          Float
+  description     String
+  referenceType   ReferenceType
+  referenceId     String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  // Relations
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("ticketbooking")
+  @@index([userEmail, createdAt])
+  @@index([userId])
+}
+
+// ==================== WALLET TOPUP REQUEST ==================== //
+model WalletTopupRequest {
+  id                  Int       @id @default(autoincrement())
+  userId              Int
+  userEmail           String
+  userName            String
+  amount              Float
+  paymentMode         PaymentMode
+  receiptUrl          String?
+  receiptPublicId     String?
+  declarationAccepted Boolean   @default(false)
+  status              TopupStatus @default(PENDING)
+  adminId             Int?
+  adminRemarks        String?
+  resolvedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  // Relations
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  admin               User?     @relation("AdminRelation", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@schema("ticketbooking")
+  @@index([status, createdAt])
+  @@index([userEmail, createdAt])
+  @@index([userId])
+}
+
+// ==================== ENUMS ==================== //
+enum UserRole {
+  USER
+  ADMIN
+
+  @@schema("ticketbooking")
+}
+
+enum SeatState {
+  AVAILABLE
+  RESERVED
+  BOOKED
+
+  @@schema("ticketbooking")
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+
+  @@schema("ticketbooking")
+}
+
+enum WalletTransactionType {
+  CREDIT
+  DEBIT
+
+  @@schema("ticketbooking")
+}
+
+enum ReferenceType {
+  TOPUP_REQUEST
+  BOOKING
+  BOOKING_CANCEL
+
+  @@schema("ticketbooking")
+}
+
+enum PaymentMode {
+  UPI
+  DEBIT_CARD
+  CREDIT_CARD
+  BANK_TRANSFER
+  NET_BANKING
+
+  @@schema("ticketbooking")
+}
+
+enum TopupStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@schema("ticketbooking")
+}

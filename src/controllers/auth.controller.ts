@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import User from "../shared/models/user.model";
 import Admin from "../shared/models/admin.model";
 import generateToken from "../utils/generateToken";
+import { UserRole } from "../generated/prisma/enums";
 
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
 	try {
@@ -105,7 +106,7 @@ export const loginUserOnly = async (req: Request, res: Response): Promise<void> 
 			return;
 		}
 
-		if (user.role !== "user") {
+		if (user.role !== UserRole.USER) {
 			res.status(403).json({ message: "Access denied. Please use the Admin login." });
 			return;
 		}

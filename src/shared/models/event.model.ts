@@ -1,61 +1,73 @@
-import mongoose from "mongoose";
+// Event model interfaces for Prisma/PostgreSQL
 
-const eventSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    description: {
-      type: String,
-      trim: true,
-    },
-    date: {
-      type: Date,
-      required: true,
-    },
-    time: {
-      type: String,
-      trim: true,
-    },
-    venue: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    price: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-    capacity: {
-      type: Number,
-      required: true,
-      min: 1,
-    },
-    ticketsSold: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    image: {
-      type: String,
-      trim: true,
-    },
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Admin",
-      required: true,
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
-  },
-  { timestamps: true }
-);
+export interface Event {
+  id: number;
+  name: string;
+  description?: string | null;
+  date: Date;
+  time?: string | null;
+  venue: string;
+  price: number;
+  capacity: number;
+  ticketsSold: number;
+  image?: string | null;
+  isActive: boolean;
+  createdBy: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-eventSchema.index({ createdAt: -1 });
+export interface EventWithAdmin extends Event {
+  admin: {
+    id: number;
+    name: string;
+    email: string;
+  };
+}
 
-export default mongoose.model("Event", eventSchema);
+export interface CreateEventInput {
+  name: string;
+  description?: string;
+  date: Date;
+  time?: string;
+  venue: string;
+  price: number;
+  capacity: number;
+  image?: string;
+  createdBy: number;
+}
+
+export interface UpdateEventInput {
+  name?: string;
+  description?: string;
+  date?: Date;
+  time?: string;
+  venue?: string;
+  price?: number;
+  capacity?: number;
+  image?: string;
+  isActive?: boolean;
+}
+
+export interface EventFilters {
+  search?: string;
+  sortBy?: 'date' | 'price-low' | 'price-high' | 'newest';
+  isActive?: boolean;
+}
+
+export interface EventResponse {
+  id: number;
+  name: string;
+  description?: string | null;
+  date: Date;
+  time?: string | null;
+  venue: string;
+  price: number;
+  capacity: number;
+  ticketsSold: number;
+  image?: string | null;
+  createdBy: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}

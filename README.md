@@ -1,13 +1,13 @@
 # Ticket Booking Backend
 
-Node.js + Express + MongoDB backend for event ticket booking with seat reservation, wallet flows, top-up approval, and atomic booking confirmation.
+Node.js + Express + PostgreSQL backend for event ticket booking with seat reservation, wallet flows, top-up approval, and atomic booking confirmation.
 
 ## Tech Stack
 
 - Node.js
 - Express
 - TypeScript
-- MongoDB + Mongoose
+- PostgreSQL
 - JWT authentication
 - bcrypt password hashing
 - multer + Cloudinary receipt uploads
@@ -69,7 +69,7 @@ Create a .env file in project root:
 
 ```env
 PORT=5000
-MONGO_URI=your_mongodb_connection_string
+DATABASE_URL=your_postgresql_connection_string
 JWT_SECRET=your_jwt_secret
 ADMIN_SECRET=your_admin_secret
 ```

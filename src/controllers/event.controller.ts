@@ -1,7 +1,5 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import Event from "../shared/models/event.model";
-import Seat from "../shared/models/seat.model";
+import prisma from "../config/prisma";
 import { AuthenticatedRequest } from "../types/auth.types";
 
 const toEventDate = (date: unknown, time: unknown): Date | null => {
@@ -27,7 +25,7 @@ const toEventDate = (date: unknown, time: unknown): Date | null => {
 const isValidHHmm = (value: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 
 const toEventResponse = (event: any) => ({
-	id: event._id?.toString(),
+	id: event.id,
 	name: event.name,
 	description: event.description,
 	date: event.date,
@@ -48,31 +46,47 @@ export const getAllEvents = async (req: Request, res: Response): Promise<void> =
 	try {
 		const { search, sortBy = "date" } = req.query;
 
-		let query: Record<string, unknown> = { isActive: true };
+		let where: any = { isActive: true };
 
 		if (search && typeof search === "string") {
-			query.$or = [
-				{ name: { $regex: search, $options: "i" } },
-				{ venue: { $regex: search, $options: "i" } },
-				{ description: { $regex: search, $options: "i" } },
+			where.OR = [
+				{ name: { contains: search, mode: "insensitive" } },
+				{ venue: { contains: search, mode: "insensitive" } },
+				{ description: { contains: search, mode: "insensitive" } },
 			];
 		}
 
-		const sortOptions: Record<string, 1 | -1> = {};
+		let orderBy: any = {};
 		if (sortBy === "date") {
-			sortOptions.date = 1;
+			orderBy.date = "asc";
 		} else if (sortBy === "price-low") {
-			sortOptions.price = 1;
+			orderBy.price = "asc";
 		} else if (sortBy === "price-high") {
-			sortOptions.price = -1;
+			orderBy.price = "desc";
 		} else if (sortBy === "newest") {
-			sortOptions.createdAt = -1;
+			orderBy.createdAt = "desc";
 		}
 
-		const events = await Event.find(query)
-			.sort(sortOptions)
-			.select("name description date time venue price capacity ticketsSold image createdBy isActive createdAt updatedAt")
-			.lean();
+		const events = await prisma.event.findMany({
+			where,
+			orderBy,
+			select: {
+				id: true,
+				name: true,
+				description: true,
+				date: true,
+				time: true,
+				venue: true,
+				price: true,
+				capacity: true,
+				ticketsSold: true,
+				image: true,
+				createdBy: true,
+				isActive: true,
+				createdAt: true,
+				updatedAt: true,
+			},
+		});
 
 		res.status(200).json({
 			message: "Events retrieved successfully",
@@ -89,10 +103,41 @@ export const getEventById = async (req: Request, res: Response): Promise<void> =
 	try {
 		const { eventId } = req.params;
 
-		const event = await Event.findById(eventId)
-			.select("name description date time venue price capacity ticketsSold image createdBy isActive")
-			.populate("createdBy", "name email")
-			.lean();
+		if (!eventId || Array.isArray(eventId)) {
+			res.status(400).json({ message: "Event ID is required" });
+			return;
+		}
+
+		const eventIdInt = parseInt(eventId, 10);
+
+		if (isNaN(eventIdInt)) {
+			res.status(400).json({ message: "Invalid event ID" });
+			return;
+		}
+
+		const event = await prisma.event.findUnique({
+			where: { id: eventIdInt },
+			select: {
+				id: true,
+				name: true,
+				description: true,
+				date: true,
+				time: true,
+				venue: true,
+				price: true,
+				capacity: true,
+				ticketsSold: true,
+				image: true,
+				createdBy: true,
+				isActive: true,
+				admin: {
+					select: {
+						name: true,
+						email: true,
+					},
+				},
+			},
+		});
 
 		if (!event) {
 			res.status(404).json({ message: "Event not found" });
@@ -120,12 +165,11 @@ export const createEvent = async (
 			return;
 		}
 
-		if (!mongoose.Types.ObjectId.isValid(userId)) {
+		const creatorId = parseInt(userId, 10);
+		if (isNaN(creatorId)) {
 			res.status(401).json({ message: "Invalid user token" });
 			return;
 		}
-
-		const creatorId = new mongoose.Types.ObjectId(userId);
 
 		const {
 			name,
@@ -170,16 +214,18 @@ export const createEvent = async (
 			return;
 		}
 
-		const event = await Event.create({
-			name,
-			description,
-			date: normalizedDate,
-			time,
-			venue,
-			price,
-			capacity,
-			image,
-			createdBy: creatorId,
+		const event = await prisma.event.create({
+			data: {
+				name,
+				description,
+				date: normalizedDate,
+				time,
+				venue,
+				price,
+				capacity,
+				image,
+				createdBy: creatorId,
+			},
 		});
 
 		res.status(201).json({
@@ -204,16 +250,32 @@ export const updateEvent = async (
 		}
 
 		const { eventId } = req.params;
-		const { name, description, date, time, venue, price, capacity, image, isActive } =
-			req.body;
 
-		const event = await Event.findById(eventId);
+		if (!eventId || Array.isArray(eventId)) {
+			res.status(400).json({ message: "Event ID is required" });
+			return;
+		}
+
+		const eventIdInt = parseInt(eventId, 10);
+		const userIdInt = parseInt(userId, 10);
+
+		if (isNaN(eventIdInt) || isNaN(userIdInt)) {
+			res.status(400).json({ message: "Invalid IDs" });
+			return;
+		}
+
+		const { name, description, date, time, venue, price, capacity, image, isActive } = req.body;
+
+		const event = await prisma.event.findUnique({
+			where: { id: eventIdInt },
+		});
+
 		if (!event) {
 			res.status(404).json({ message: "Event not found" });
 			return;
 		}
 
-		if (String(event.createdBy) !== userId) {
+		if (event.createdBy !== userIdInt) {
 			res.status(403).json({ message: "Not authorized to update this event" });
 			return;
 		}
@@ -236,21 +298,20 @@ export const updateEvent = async (
 			}
 		}
 
-		const updatedEvent = await Event.findByIdAndUpdate(
-			eventId,
-			{
-				name: name || event.name,
-				description: description || event.description,
-				date: normalizedDate || event.date,
-				time: time || event.time,
-				venue: venue || event.venue,
+		const updatedEvent = await prisma.event.update({
+			where: { id: eventIdInt },
+			data: {
+				name: name ?? event.name,
+				description: description ?? event.description,
+				date: normalizedDate ?? event.date,
+				time: time ?? event.time,
+				venue: venue ?? event.venue,
 				price: price !== undefined ? price : event.price,
-				capacity: capacity || event.capacity,
-				image: image || event.image,
+				capacity: capacity ?? event.capacity,
+				image: image ?? event.image,
 				isActive: isActive !== undefined ? isActive : event.isActive,
 			},
-			{ new: true }
-		);
+		});
 
 		res.status(200).json({
 			message: "Event updated successfully",
@@ -275,21 +336,41 @@ export const deleteEvent = async (
 
 		const { eventId } = req.params;
 
-		const event = await Event.findById(eventId);
+		if (!eventId || Array.isArray(eventId)) {
+			res.status(400).json({ message: "Event ID is required" });
+			return;
+		}
+
+		const eventIdInt = parseInt(eventId, 10);
+		const userIdInt = parseInt(userId, 10);
+
+		if (isNaN(eventIdInt) || isNaN(userIdInt)) {
+			res.status(400).json({ message: "Invalid IDs" });
+			return;
+		}
+
+		const event = await prisma.event.findUnique({
+			where: { id: eventIdInt },
+		});
+
 		if (!event) {
 			res.status(404).json({ message: "Event not found" });
 			return;
 		}
 
-		if (String(event.createdBy) !== userId) {
+		if (event.createdBy !== userIdInt) {
 			res.status(403).json({ message: "Not authorized to delete this event" });
 			return;
 		}
 
-		await Event.findByIdAndDelete(eventId);
+		await prisma.event.delete({
+			where: { id: eventIdInt },
+		});
 
 		// Delete all associated seats
-		await Seat.deleteMany({ eventId: new mongoose.Types.ObjectId(eventId as string) });
+		await prisma.seat.deleteMany({
+			where: { eventId: eventIdInt },
+		});
 
 		res.status(200).json({
 			message: "Event deleted successfully",
@@ -304,7 +385,27 @@ export const getAvailableTickets = async (req: Request, res: Response): Promise<
 	try {
 		const { eventId } = req.params;
 
-		const event = await Event.findById(eventId).select("name capacity ticketsSold");
+		if (!eventId || Array.isArray(eventId)) {
+			res.status(400).json({ message: "Event ID is required" });
+			return;
+		}
+
+		const eventIdInt = parseInt(eventId, 10);
+
+		if (isNaN(eventIdInt)) {
+			res.status(400).json({ message: "Invalid event ID" });
+			return;
+		}
+
+		const event = await prisma.event.findUnique({
+			where: { id: eventIdInt },
+			select: {
+				name: true,
+				capacity: true,
+				ticketsSold: true,
+			},
+		});
+
 		if (!event) {
 			res.status(404).json({ message: "Event not found" });
 			return;
@@ -313,7 +414,7 @@ export const getAvailableTickets = async (req: Request, res: Response): Promise<
 		const availableTickets = event.capacity - event.ticketsSold;
 
 		res.status(200).json({
-			eventId,
+			eventId: eventIdInt,
 			eventName: event.name,
 			totalCapacity: event.capacity,
 			ticketsSold: event.ticketsSold,

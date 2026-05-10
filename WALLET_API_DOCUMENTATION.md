@@ -2,13 +2,15 @@
 
 ## Database Models
 
-### 1. **Wallet Collection**
+The wallet module now uses PostgreSQL through Prisma. The structures below describe the persisted records and API-facing fields.
+
+### 1. **Wallet Table**
 Stores current wallet balance per user.
 
 ```javascript
 {
-  _id: ObjectId,
-  userId: ObjectId (ref: User),
+  id: Int,
+  userId: Int (unique, ref: User.id),
   userEmail: String (unique, lowercase),
   balance: Number (default: 0, min: 0),
   createdAt: Date,
@@ -16,24 +18,26 @@ Stores current wallet balance per user.
 }
 ```
 
-### 2. **WalletTopupRequest Collection**
+### 2. **WalletTopupRequest Table**
 Stores all top-up requests with approval workflow.
 
 ```javascript
 {
-  _id: ObjectId,
-  userId: ObjectId (ref: User),
+  id: Int,
+  userId: Int (ref: User.id),
   userEmail: String (lowercase, indexed),
   userName: String,
   amount: Number (min: 1, max: 100000),
-  paymentMode: String (enum: "UPI", "Debit Card", "Credit Card", "Bank Transfer", "Net Banking"),
-  receiptUrl: String (file path to uploaded receipt),
+  paymentMode: String (enum: "UPI", "DEBIT_CARD", "CREDIT_CARD", "BANK_TRANSFER", "NET_BANKING"),
+  receiptUrl: String | null,
+  receiptPublicId: String | null,
   declarationAccepted: Boolean (default: false),
-  status: String (enum: "pending", "approved", "rejected", default: "pending", indexed),
-  adminId: ObjectId (ref: User, optional),
-  adminRemarks: String (optional),
+  status: String (enum: "PENDING", "APPROVED", "REJECTED", default: "PENDING", indexed),
+  adminId: Int | null,
+  adminRemarks: String | null,
   createdAt: Date,
-  resolvedAt: Date (when approved/rejected)
+  updatedAt: Date,
+  resolvedAt: Date | null
 }
 ```
 
@@ -41,20 +45,22 @@ Stores all top-up requests with approval workflow.
 - Compound: `{ status: 1, createdAt: -1 }`
 - Compound: `{ userEmail: 1, createdAt: -1 }`
 
-### 3. **WalletTransaction Collection** (Ledger)
+### 3. **WalletTransaction Table** (Ledger)
 Immutable ledger of all wallet transactions.
 
 ```javascript
 {
-  _id: ObjectId,
-  userId: ObjectId (ref: User),
+  id: Int,
+  userId: Int (ref: User.id),
   userEmail: String (lowercase, indexed),
-  type: String (enum: "credit", "debit"),
+  userName: String,
+  type: String (enum: "CREDIT", "DEBIT"),
   amount: Number (min: 0),
   description: String,
   referenceType: String (enum: "TOPUP_REQUEST", "BOOKING", "BOOKING_CANCEL"),
   referenceId: String (ID of the reference),
-  createdAt: Date
+  createdAt: Date,
+  updatedAt: Date
 }
 ```
 
@@ -86,9 +92,14 @@ Create a new top-up request with receipt upload.
 **Response (201):**
 ```javascript
 {
-  message: "Top-up request created successfully",
-  requestId: "ObjectId",
-  status: "pending"
+  id: 12,
+  userEmail: "user@example.com",
+  userName: "John Doe",
+  amount: 500,
+  paymentMode: "UPI",
+  receiptUrl: "https://.../receipt.png",
+  status: "pending",
+  createdAt: "2026-05-10T10:30:00Z"
 }
 ```
 
@@ -111,13 +122,14 @@ Get all top-up requests for the authenticated user, sorted by newest first.
 {
   requests: [
     {
-      id: "ObjectId",
-      userId: "ObjectId",
+      id: 12,
+      userId: 4,
       userEmail: "user@example.com",
       userName: "John Doe",
       amount: 500,
       paymentMode: "UPI",
       receiptUrl: "/uploads/receipts/receipt-1712000000-123456.png",
+      declarationAccepted: true,
       status: "pending" | "approved" | "rejected",
       createdAt: "2026-04-12T10:30:00Z",
       resolvedAt: "2026-04-12T11:00:00Z" | null,
@@ -138,8 +150,7 @@ Get the current wallet balance for the authenticated user.
 **Response (200):**
 ```javascript
 {
-  balance: 1500,
-  email: "user@example.com"
+  balance: 1500
 }
 ```
 
@@ -160,8 +171,10 @@ Get wallet transaction history (ledger) for the authenticated user.
 {
   transactions: [
     {
-      id: "ObjectId",
-      type: "credit",                    // "credit" | "debit"
+      id: 45,
+      userEmail: "user@example.com",
+      userName: "John Doe",
+      type: "CREDIT",                    // "CREDIT" | "DEBIT"
       amount: 500,
       description: "Wallet top-up approved via UPI",
       referenceType: "TOPUP_REQUEST",    // "TOPUP_REQUEST" | "BOOKING" | "BOOKING_CANCEL"
@@ -193,8 +206,8 @@ List all pending top-up requests (or filtered by status).
 {
   requests: [
     {
-      id: "ObjectId",
-      userId: "ObjectId",
+      id: 12,
+      userId: 4,
       userEmail: "user@example.com",
       userName: "John Doe",
       amount: 500,
@@ -216,16 +229,15 @@ List all pending top-up requests (or filtered by status).
 #### 6. PATCH /api/wallet/admin/topup-requests/:id/approve
 Approve a top-up request. **Atomic transaction** that:
 1. Credits the user's wallet
-2. Debits the admin's wallet
-3. Creates transaction records for both
-4. Marks request as approved
+2. Creates a credit transaction record for the user
+3. Marks request as approved
 
 **Auth:** Bearer token (admin only)  
 **Role:** Requires `admin` role in JWT
 
 **Path Parameters:**
 ```
-:id = WalletTopupRequest._id
+:id = WalletTopupRequest.id
 ```
 
 **Request Body:**
@@ -238,17 +250,15 @@ Approve a top-up request. **Atomic transaction** that:
 **Response (200):**
 ```javascript
 {
-  message: "Top-up approved successfully",
-  requestId: "ObjectId",
-  newBalance: 1500,
-  amount: 500
+  message: "Top-up approved",
+  requestId: 12,
+  newBalance: 1500
 }
 ```
 
 **Error Responses:**
 - `404`: Request not found
 - `409`: Request already approved/rejected (cannot approve twice)
-- `400`: Insufficient admin wallet balance (cannot debit more than admin has)
 
 ---
 
@@ -260,7 +270,7 @@ Reject a top-up request. No wallet changes, just status update.
 
 **Path Parameters:**
 ```
-:id = WalletTopupRequest._id
+:id = WalletTopupRequest.id
 ```
 
 **Request Body:**
@@ -274,7 +284,7 @@ Reject a top-up request. No wallet changes, just status update.
 ```javascript
 {
   message: "Top-up request rejected",
-  requestId: "ObjectId",
+  requestId: 12,
   status: "rejected"
 }
 ```
@@ -289,12 +299,10 @@ Reject a top-up request. No wallet changes, just status update.
 
 ### On Approval (Atomic Transaction)
 1. **Verify** request exists and status is "pending"
-2. **Verify** admin has sufficient wallet balance to debit
-3. **Credit** user wallet with `amount`
-4. **Debit** admin wallet with `amount`
-5. **Create** two transaction records (user credit, admin debit)
-6. **Update** request status to "approved" + set `adminId`, `adminRemarks`, `resolvedAt`
-7. **If any step fails**, rollback entire transaction (MongoDB session)
+2. **Credit** user wallet with `amount`
+3. **Create** one transaction record (user credit)
+4. **Update** request status to "approved" + set `adminId`, `adminRemarks`, `resolvedAt`
+5. **If any step fails**, rollback entire transaction (Prisma/PostgreSQL transaction)
 
 ### Idempotency & Conflict Prevention
 - If request is already `approved` or `rejected`, return `409 Conflict`
@@ -336,18 +344,16 @@ Reject a top-up request. No wallet changes, just status update.
 ### Balance API
 ```javascript
 {
-  balance: 1500,
-  email: "user@example.com"
+  balance: 1500
 }
 ```
 
 ### Approval API
 ```javascript
 {
-  message: "Top-up approved successfully",
-  requestId: "ObjectId",
-  newBalance: 1500,
-  amount: 500
+  message: "Top-up approved",
+  requestId: 12,
+  newBalance: 1500
 }
 ```
 
@@ -433,7 +439,7 @@ curl -X PATCH http://localhost:5000/api/wallet/admin/topup-requests/REQUEST_ID/r
 ---
 
 ## Database Indexes
-Automatically created by Mongoose schema:
+Created by the PostgreSQL schema / Prisma models:
 - `wallets`: unique index on `userEmail`
 - `wallet_topup_requests`: `{ status: 1, createdAt: -1 }` and `{ userEmail: 1, createdAt: -1 }`
 - `wallet_transactions`: `{ userEmail: 1, createdAt: -1 }`

@@ -1,11 +1,77 @@
 import { Response } from "express";
-import Wallet from "../shared/models/wallet.model";
-import WalletTopupRequest from "../shared/models/walletTopupRequest.model";
-import WalletTransaction from "../shared/models/walletTransaction.model";
 import User from "../shared/models/user.model";
 import { AuthenticatedRequest } from "../types/auth.types";
-import mongoose from "mongoose";
+import prisma from "../config/prisma";
+import { type Prisma } from "../generated/prisma/client";
+import { PaymentMode, ReferenceType, TopupStatus, WalletTransactionType } from "../generated/prisma/enums";
 import { uploadReceiptToCloudinary } from "../config/cloudinary";
+
+const parseId = (value: unknown): number | null => {
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isSafeInteger(value) ? value : null;
+  const asString = String(value);
+  if (!/^\d+$/.test(asString)) return null;
+  const parsed = parseInt(asString, 10);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+};
+
+const normalizePaymentMode = (value: unknown): PaymentMode | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+
+  if (normalized === "UPI") return PaymentMode.UPI;
+  if (normalized === "DEBIT_CARD") return PaymentMode.DEBIT_CARD;
+  if (normalized === "CREDIT_CARD") return PaymentMode.CREDIT_CARD;
+  if (normalized === "BANK_TRANSFER") return PaymentMode.BANK_TRANSFER;
+  if (normalized === "NET_BANKING") return PaymentMode.NET_BANKING;
+
+  return null;
+};
+
+const normalizeTopupStatus = (value: unknown): TopupStatus | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "PENDING") return TopupStatus.PENDING;
+  if (normalized === "APPROVED") return TopupStatus.APPROVED;
+  if (normalized === "REJECTED") return TopupStatus.REJECTED;
+  return null;
+};
+
+const toApiTopupStatus = (status: TopupStatus): "pending" | "approved" | "rejected" => {
+  if (status === TopupStatus.PENDING) return "pending";
+  if (status === TopupStatus.APPROVED) return "approved";
+  return "rejected";
+};
+
+type TopupListItem = {
+  id: number;
+  userId: number;
+  userEmail: string;
+  userName: string;
+  amount: number;
+  paymentMode: PaymentMode;
+  receiptUrl: string | null;
+  declarationAccepted: boolean;
+  status: TopupStatus;
+  createdAt: Date;
+  resolvedAt: Date | null;
+  adminRemarks: string | null;
+};
+
+const mapTopupResponse = (request: TopupListItem) => ({
+  id: request.id,
+  userId: request.userId,
+  userEmail: request.userEmail,
+  userName: request.userName,
+  amount: request.amount,
+  paymentMode: request.paymentMode,
+  receiptUrl: request.receiptUrl,
+  declarationAccepted: request.declarationAccepted,
+  status: toApiTopupStatus(request.status),
+  createdAt: request.createdAt,
+  resolvedAt: request.resolvedAt,
+  adminRemarks: request.adminRemarks,
+});
 
 // Create wallet topup request
 export const createTopupRequest = async (req: AuthenticatedRequest, res: Response) => {
@@ -13,6 +79,7 @@ export const createTopupRequest = async (req: AuthenticatedRequest, res: Respons
     const { amount, paymentMode, declarationAccepted } = req.body;
     const file = (req as any).file;
     const parsedAmount = Number(amount);
+    const paymentModeEnum = normalizePaymentMode(paymentMode);
     const declarationAcceptedBool =
       declarationAccepted === true || declarationAccepted === "true";
 
@@ -21,7 +88,7 @@ export const createTopupRequest = async (req: AuthenticatedRequest, res: Respons
       return res.status(400).json({ error: "Invalid amount. Must be between 1 and 100000" });
     }
 
-    if (!paymentMode || !["UPI", "Debit Card", "Credit Card", "Bank Transfer", "Net Banking"].includes(paymentMode)) {
+    if (!paymentModeEnum) {
       return res.status(400).json({ error: "Invalid payment mode" });
     }
 
@@ -46,23 +113,27 @@ export const createTopupRequest = async (req: AuthenticatedRequest, res: Respons
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Create topup request
-    const topupRequest = new WalletTopupRequest({
-      userId: req.user?.id,
-      userEmail: user.email.toLowerCase(),
-      userName: user.name,
-      amount: parsedAmount,
-      paymentMode,
-      receiptUrl,
-      receiptPublicId,
-      declarationAccepted: declarationAcceptedBool,
-      status: "pending",
+    const userId = parseId(req.user?.id);
+    if (userId === null) {
+      return res.status(401).json({ error: "Not authorized" });
+    }
+
+    const topupRequest = await prisma.walletTopupRequest.create({
+      data: {
+        userId,
+        userEmail: user.email.toLowerCase(),
+        userName: user.name,
+        amount: parsedAmount,
+        paymentMode: paymentModeEnum,
+        receiptUrl,
+        receiptPublicId: receiptPublicId ?? null,
+        declarationAccepted: declarationAcceptedBool,
+        status: TopupStatus.PENDING,
+      },
     });
 
-    await topupRequest.save();
-
     return res.status(201).json({
-      id: topupRequest._id,
+      id: topupRequest.id,
       userEmail: topupRequest.userEmail,
       userName: topupRequest.userName,
       amount: topupRequest.amount,
@@ -71,8 +142,9 @@ export const createTopupRequest = async (req: AuthenticatedRequest, res: Respons
       status: "pending",
       createdAt: topupRequest.createdAt,
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    res.status(500).json({ error: message });
   }
 };
 
@@ -84,30 +156,20 @@ export const getUserTopupRequests = async (req: AuthenticatedRequest, res: Respo
       return res.status(404).json({ error: "User not found" });
     }
 
-    const requests = await WalletTopupRequest.find({ userEmail: user.email.toLowerCase() })
-      .sort({ createdAt: -1 });
+    const requests = await prisma.walletTopupRequest.findMany({
+      where: { userEmail: user.email.toLowerCase() },
+      orderBy: { createdAt: "desc" },
+    });
 
-    // Transform response to include id field
-    const transformedRequests = requests.map((req) => ({
-      id: req._id,
-      userId: req.userId,
-      userEmail: req.userEmail,
-      userName: req.userName,
-      amount: req.amount,
-      paymentMode: req.paymentMode,
-      receiptUrl: req.receiptUrl,
-      status: req.status,
-      createdAt: req.createdAt,
-      resolvedAt: req.resolvedAt,
-      adminRemarks: req.adminRemarks,
-    }));
+    const transformedRequests = requests.map(mapTopupResponse);
 
     return res.status(200).json({
       requests: transformedRequests,
       count: transformedRequests.length,
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    res.status(500).json({ error: message });
   }
 };
 
@@ -119,23 +181,31 @@ export const getWalletBalance = async (req: AuthenticatedRequest, res: Response)
       return res.status(404).json({ error: "User not found" });
     }
 
-    let wallet = await Wallet.findOne({ userEmail: user.email.toLowerCase() });
+    const userId = parseId(req.user?.id);
+    if (userId === null) {
+      return res.status(401).json({ error: "Not authorized" });
+    }
+
+    let wallet = await prisma.wallet.findUnique({
+      where: { userEmail: user.email.toLowerCase() },
+    });
 
     if (!wallet) {
-      // Create wallet if doesn't exist
-      wallet = new Wallet({
-        userId: req.user?.id,
-        userEmail: user.email.toLowerCase(),
-        balance: user.walletBalance || 0,
+      wallet = await prisma.wallet.create({
+        data: {
+          userId,
+          userEmail: user.email.toLowerCase(),
+          balance: user.walletBalance || 0,
+        },
       });
-      await wallet.save();
     }
 
     return res.status(200).json({
       balance: wallet.balance,
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    res.status(500).json({ error: message });
   }
 };
 
@@ -147,12 +217,13 @@ export const getWalletTransactions = async (req: AuthenticatedRequest, res: Resp
       return res.status(404).json({ error: "User not found" });
     }
 
-    const transactions = await WalletTransaction.find({ userEmail: user.email.toLowerCase() })
-      .sort({ createdAt: -1 });
+    const transactions = await prisma.walletTransaction.findMany({
+      where: { userEmail: user.email.toLowerCase() },
+      orderBy: { createdAt: "desc" },
+    });
 
-    // Transform response to include id field
     const transformedTransactions = transactions.map((tx) => ({
-      id: tx._id,
+      id: tx.id,
       userEmail: tx.userEmail,
       userName: tx.userName,
       type: tx.type,
@@ -167,8 +238,9 @@ export const getWalletTransactions = async (req: AuthenticatedRequest, res: Resp
       transactions: transformedTransactions,
       count: transformedTransactions.length,
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    res.status(500).json({ error: message });
   }
 };
 
@@ -177,115 +249,122 @@ export const getAllTopupRequests = async (req: AuthenticatedRequest, res: Respon
   try {
     const { status = "pending" } = req.query;
 
-    const query: any = {};
-    if (status) {
-      query.status = status;
+    const statusFilter = status ? normalizeTopupStatus(status) : null;
+    if (status && !statusFilter) {
+      return res.status(400).json({ error: "Invalid status filter" });
     }
 
-    const requests = await WalletTopupRequest.find(query)
-      .sort({ createdAt: -1 });
+    const query: Prisma.WalletTopupRequestFindManyArgs = {
+      orderBy: { createdAt: "desc" },
+    };
 
-    // Transform response to include id field
-    const transformedRequests = requests.map((req) => ({
-      id: req._id,
-      userId: req.userId,
-      userEmail: req.userEmail,
-      userName: req.userName,
-      amount: req.amount,
-      paymentMode: req.paymentMode,
-      receiptUrl: req.receiptUrl,
-      declarationAccepted: req.declarationAccepted,
-      status: req.status,
-      createdAt: req.createdAt,
-      resolvedAt: req.resolvedAt,
-      adminRemarks: req.adminRemarks,
-    }));
+    if (statusFilter) {
+      query.where = { status: statusFilter };
+    }
+
+    const requests = await prisma.walletTopupRequest.findMany(query);
+
+    const transformedRequests = requests.map(mapTopupResponse);
 
     return res.status(200).json({
       requests: transformedRequests,
       count: transformedRequests.length,
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    res.status(500).json({ error: message });
   }
 };
 
 // Approve topup request (atomic + idempotent)
 export const approveTopupRequest = async (req: AuthenticatedRequest, res: Response) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     const { id } = req.params;
     const { adminRemarks = "" } = req.body;
+    const requestId = parseId(id);
+    if (requestId === null) {
+      return res.status(400).json({ error: "Invalid request id" });
+    }
 
-    // Atomically claim the request — only if still pending (prevents double-approval race)
-    const topupRequest = await WalletTopupRequest.findOneAndUpdate(
-      { _id: id, status: "pending" },
-      {
-        $set: {
-          status: "approved",
-          adminId: req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : undefined,
+    const adminId = parseId(req.user?.id);
+
+    const txResult = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.walletTopupRequest.updateMany({
+        where: { id: requestId, status: TopupStatus.PENDING },
+        data: {
+          status: TopupStatus.APPROVED,
+          adminId,
           adminRemarks,
           resolvedAt: new Date(),
         },
-      },
-      { new: true, session }
-    );
+      });
 
-    if (!topupRequest) {
-      // Either not found or already processed
-      await session.abortTransaction();
-      const existing = await WalletTopupRequest.findById(id).lean();
-      if (!existing) {
-        return res.status(404).json({ error: "Top-up request not found" });
+      if (claimed.count === 0) {
+        const existing = await tx.walletTopupRequest.findUnique({ where: { id: requestId } });
+        if (!existing) {
+          return { kind: "not-found" as const };
+        }
+        return { kind: "already-processed" as const, status: existing.status };
       }
-      return res.status(409).json({ error: `Request already ${(existing as any).status}. Cannot approve.` });
+
+      const topupRequest = await tx.walletTopupRequest.findUnique({ where: { id: requestId } });
+      if (!topupRequest) {
+        return { kind: "not-found" as const };
+      }
+
+      let wallet = await tx.wallet.findUnique({
+        where: { userEmail: topupRequest.userEmail },
+      });
+
+      if (!wallet) {
+        wallet = await tx.wallet.create({
+          data: {
+            userId: topupRequest.userId,
+            userEmail: topupRequest.userEmail,
+            balance: topupRequest.amount,
+          },
+        });
+      } else {
+        wallet = await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { balance: { increment: topupRequest.amount } },
+        });
+      }
+
+      await tx.walletTransaction.create({
+        data: {
+          userId: topupRequest.userId,
+          userEmail: topupRequest.userEmail,
+          userName: topupRequest.userName,
+          type: WalletTransactionType.CREDIT,
+          amount: topupRequest.amount,
+          description: `Wallet top-up approved via ${topupRequest.paymentMode}`,
+          referenceType: ReferenceType.TOPUP_REQUEST,
+          referenceId: String(topupRequest.id),
+        },
+      });
+
+      return { kind: "success" as const, topupRequest, wallet };
+    });
+
+    if (txResult.kind === "not-found") {
+      return res.status(404).json({ error: "Top-up request not found" });
     }
 
-    // Credit user's wallet
-    let wallet = await Wallet.findOneAndUpdate(
-      { userEmail: topupRequest.userEmail },
-      { $inc: { balance: topupRequest.amount } },
-      { new: true, session }
-    );
-
-    if (!wallet) {
-      // Create wallet if absent
-      const created = await Wallet.create(
-        [{ userId: topupRequest.userId, userEmail: topupRequest.userEmail, balance: topupRequest.amount }],
-        { session }
-      );
-      wallet = created[0] ?? null;
+    if (txResult.kind === "already-processed") {
+      return res.status(409).json({
+        error: `Request already ${toApiTopupStatus(txResult.status)}. Cannot approve.`,
+      });
     }
-
-    // Create credit transaction for user
-    await WalletTransaction.create(
-      [{
-        userId: topupRequest.userId,
-        userEmail: topupRequest.userEmail,
-        userName: topupRequest.userName,
-        type: "credit",
-        amount: topupRequest.amount,
-        description: `Wallet top-up approved via ${topupRequest.paymentMode}`,
-        referenceType: "TOPUP_REQUEST",
-        referenceId: topupRequest._id.toString(),
-      }],
-      { session }
-    );
-
-    await session.commitTransaction();
 
     return res.status(200).json({
       message: "Top-up approved",
-      requestId: topupRequest._id,
-      newBalance: wallet?.balance ?? 0,
+      requestId: txResult.topupRequest.id,
+      newBalance: txResult.wallet.balance,
     });
-  } catch (error: any) {
-    await session.abortTransaction();
-    res.status(500).json({ error: error.message });
-  } finally {
-    session.endSession();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    res.status(500).json({ error: message });
   }
 };
 
@@ -294,34 +373,40 @@ export const rejectTopupRequest = async (req: AuthenticatedRequest, res: Respons
   try {
     const { id } = req.params;
     const { adminRemarks = "" } = req.body;
+    const requestId = parseId(id);
+    if (requestId === null) {
+      return res.status(400).json({ error: "Invalid request id" });
+    }
 
-    const topupRequest = await WalletTopupRequest.findOneAndUpdate(
-      { _id: id, status: "pending" },
-      {
-        $set: {
-          status: "rejected",
-          adminId: req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : undefined,
-          adminRemarks,
-          resolvedAt: new Date(),
-        },
+    const adminId = parseId(req.user?.id);
+
+    const updated = await prisma.walletTopupRequest.updateMany({
+      where: { id: requestId, status: TopupStatus.PENDING },
+      data: {
+        status: TopupStatus.REJECTED,
+        adminId,
+        adminRemarks,
+        resolvedAt: new Date(),
       },
-      { new: true }
-    );
+    });
 
-    if (!topupRequest) {
-      const existing = await WalletTopupRequest.findById(id).lean();
+    if (updated.count === 0) {
+      const existing = await prisma.walletTopupRequest.findUnique({ where: { id: requestId } });
       if (!existing) {
         return res.status(404).json({ error: "Top-up request not found" });
       }
-      return res.status(409).json({ error: `Request already ${(existing as any).status}. Cannot reject.` });
+      return res.status(409).json({
+        error: `Request already ${toApiTopupStatus(existing.status)}. Cannot reject.`,
+      });
     }
 
     return res.status(200).json({
       message: "Top-up request rejected",
-      requestId: topupRequest._id,
+      requestId,
       status: "rejected",
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    res.status(500).json({ error: message });
   }
 };

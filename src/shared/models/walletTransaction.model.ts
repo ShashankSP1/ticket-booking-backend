@@ -1,50 +1,48 @@
-import mongoose from "mongoose";
+// WalletTransaction model interfaces for Prisma/PostgreSQL
 
-const walletTransactionSchema = new mongoose.Schema(
-  {
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    userEmail: {
-      type: String,
-      required: true,
-      lowercase: true,
-      index: true,
-    },
-    userName: {
-      type: String,
-      required: true,
-    },
-    type: {
-      type: String,
-      enum: ["credit", "debit"],
-      required: true,
-    },
-    amount: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-    description: {
-      type: String,
-      required: true,
-    },
-    referenceType: {
-      type: String,
-      enum: ["TOPUP_REQUEST", "BOOKING", "BOOKING_CANCEL"],
-      required: true,
-    },
-    referenceId: {
-      type: String,
-      required: true,
-    },
-  },
-  { timestamps: true }
-);
+import { WalletTransactionType, ReferenceType } from "../../generated/prisma/enums";
 
-// Create indexes for efficient queries
-walletTransactionSchema.index({ userEmail: 1, createdAt: -1 });
+export interface WalletTransaction {
+  id: number;
+  userId: number;
+  userEmail: string;
+  userName: string;
+  type: WalletTransactionType;
+  amount: number;
+  description: string;
+  referenceType: ReferenceType;
+  referenceId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-export default mongoose.model("WalletTransaction", walletTransactionSchema);
+export interface WalletTransactionWithUser extends WalletTransaction {
+  user: {
+    id: number;
+    name: string;
+    email: string;
+  };
+}
+
+export interface CreateWalletTransactionInput {
+  userId: number;
+  userEmail: string;
+  userName: string;
+  type: WalletTransactionType;
+  amount: number;
+  description: string;
+  referenceType: ReferenceType;
+  referenceId: string;
+}
+
+export interface WalletTransactionFilters {
+  userId?: number;
+  userEmail?: string;
+  type?: WalletTransactionType;
+  referenceType?: ReferenceType;
+  referenceId?: string;
+  createdAt?: {
+    gte?: Date;
+    lte?: Date;
+  };
+}

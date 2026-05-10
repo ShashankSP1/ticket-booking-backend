@@ -1,13 +1,6 @@
 ﻿import { Request, Response } from "express";
-import mongoose from "mongoose";
-import Booking from "../shared/models/booking.model";
-import Event from "../shared/models/event.model";
-import Reservation from "../shared/models/reservation.model";
-import Seat from "../shared/models/seat.model";
-import Wallet from "../shared/models/wallet.model";
-import WalletTransaction from "../shared/models/walletTransaction.model";
+import prisma from "../config/prisma";
 import { AuthenticatedRequest } from "../types/auth.types";
-import User from "../shared/models/user.model";
 
 const toBookingResponse = (booking: any) => ({
 	id: booking._id?.toString(),
@@ -37,9 +30,10 @@ export const createBooking = async (
 			return;
 		}
 
-		const loggedInUser = (await User.findById(req.user.id)
-			.select("name email role")
-			.lean()) as { name: string; email: string; role: "user" | "admin" } | null;
+		const loggedInUser = await prisma.user.findUnique({
+			where: { id: parseInt(req.user.id) },
+			select: { name: true, email: true, role: true },
+		});
 
 		if (!loggedInUser) {
 			res.status(404).json({ message: "User not found" });
@@ -71,44 +65,40 @@ export const createBooking = async (
 		let eventDoc: {
 			name: string;
 			date: Date;
-			time?: string;
+			time: string | null;
 			price: number;
 			capacity: number;
 			ticketsSold: number;
 		} | null = null;
 
-		if (String(eventId).length === 24) {
-			eventDoc = (await Event.findById(eventId)
-				.select("name date time price capacity ticketsSold")
-				.lean()) as {
-				name: string;
-				date: Date;
-				time?: string;
-				price: number;
-				capacity: number;
-				ticketsSold: number;
-			} | null;
+		// Get event details and check availability
+		eventDoc = await prisma.event.findUnique({
+			where: { id: parseInt(eventId) },
+			select: {
+				name: true,
+				date: true,
+				time: true,
+				price: true,
+				capacity: true,
+				ticketsSold: true,
+			},
+		});
 
-			if (eventDoc) {
-				const available = eventDoc.capacity - eventDoc.ticketsSold;
-				if (available < ticketCount) {
-					res.status(400).json({
-						message: `Only ${available} tickets available`,
-					});
-					return;
-				}
-
-				await Event.findByIdAndUpdate(eventId, {
-					$inc: { ticketsSold: ticketCount },
+		if (eventDoc) {
+			const available = eventDoc.capacity - eventDoc.ticketsSold;
+			if (available < ticketCount) {
+				res.status(400).json({
+					message: `Only ${available} tickets available`,
 				});
+				return;
 			}
 		}
 
 		const resolvedUserEmail = (
-			loggedInUser?.role === "user" ? loggedInUser.email : userEmail
+			loggedInUser?.role === "USER" ? loggedInUser.email : userEmail
 		)?.toLowerCase().trim();
 		const resolvedUserName =
-			loggedInUser?.role === "user" ? loggedInUser.name : userName;
+			loggedInUser?.role === "USER" ? loggedInUser.name : userName;
 
 		if (!resolvedUserEmail || !resolvedUserName) {
 			res.status(400).json({ message: "User name and email are required" });
@@ -117,7 +107,7 @@ export const createBooking = async (
 
 		const resolvedEventName = eventName ?? eventDoc?.name;
 		const resolvedEventDate =
-			eventDate ?? (eventDoc?.date ? new Date(eventDoc.date).toISOString().slice(0, 10) : undefined);
+			eventDate ?? (eventDoc?.date ? eventDoc.date.toISOString().slice(0, 10) : undefined);
 		const resolvedEventTime = eventTime ?? eventDoc?.time ?? "TBD";
 		const resolvedTotalAmount =
 			totalAmount !== undefined ? Number(totalAmount) : eventDoc ? eventDoc.price * ticketCount : undefined;
@@ -135,20 +125,38 @@ export const createBooking = async (
 			return;
 		}
 
-		const booking = await Booking.create({
-			eventId,
-			eventName: resolvedEventName,
-			eventDate: resolvedEventDate,
-			eventTime: resolvedEventTime,
-			userEmail: resolvedUserEmail,
-			userName: resolvedUserName,
-			tickets: ticketCount,
-			totalAmount: resolvedTotalAmount,
-			status: "confirmed",
-			createdAt: new Date(),
+		const result = await prisma.$transaction(async (tx) => {
+			// Create booking
+			const booking = await tx.booking.create({
+				data: {
+					eventId: eventId.toString(),
+					eventName: resolvedEventName,
+					eventDate: resolvedEventDate,
+					eventTime: resolvedEventTime,
+					userId: req.user ? parseInt(req.user.id) : 0,
+					userEmail: resolvedUserEmail,
+					userName: resolvedUserName,
+					tickets: ticketCount,
+					totalAmount: resolvedTotalAmount,
+					status: "CONFIRMED",
+					seatNumbers: [], // No specific seats for direct booking
+				},
+			});
+
+			// Increment ticketsSold
+			await tx.event.update({
+				where: { id: parseInt(eventId) },
+				data: {
+					ticketsSold: {
+						increment: ticketCount,
+					},
+				},
+			});
+
+			return booking;
 		});
 
-		res.status(201).json(toBookingResponse(booking));
+		res.status(201).json(toBookingResponse(result));
 	} catch (error) {
 		res.status(500).json({ message: "Failed to create booking", error });
 	}
@@ -160,7 +168,9 @@ export const getAllBookings = async (
 	res: Response
 ): Promise<void> => {
 	try {
-		const bookings = await Booking.find().sort({ createdAt: -1 }).lean();
+		const bookings = await prisma.booking.findMany({
+			orderBy: { createdAt: 'desc' },
+		});
 		res.status(200).json({ bookings: bookings.map(toBookingResponse) });
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
@@ -177,9 +187,10 @@ export const getBookingsByUser = async (
 		let email = Array.isArray(rawEmail) ? rawEmail[0] : rawEmail;
 
 		if (req.user?.role === "user" && req.user.id) {
-			const currentUser = (await User.findById(req.user.id)
-				.select("email")
-				.lean()) as { email: string } | null;
+			const currentUser = await prisma.user.findUnique({
+				where: { id: parseInt(req.user.id) },
+				select: { email: true },
+			});
 
 			email = currentUser?.email;
 		}
@@ -189,13 +200,12 @@ export const getBookingsByUser = async (
 			return;
 		}
 
-		const bookings = await Booking.find({
-			userEmail: decodeURIComponent(email).toLowerCase().trim(),
-		})
-			.sort({
-			createdAt: -1,
-			})
-			.lean();
+		const bookings = await prisma.booking.findMany({
+			where: {
+				userEmail: decodeURIComponent(email).toLowerCase().trim(),
+			},
+			orderBy: { createdAt: 'desc' },
+		});
 
 		res.status(200).json({ bookings: bookings.map(toBookingResponse) });
 	} catch (error) {
@@ -214,20 +224,22 @@ export const getUserBookings = async (
 			return;
 		}
 
-		const user = (await User.findById(req.user.id)
-			.select("email")
-			.lean()) as { email: string } | null;
+		const user = await prisma.user.findUnique({
+			where: { id: parseInt(req.user.id) },
+			select: { email: true },
+		});
 
 		if (!user) {
 			res.status(404).json({ message: "User not found" });
 			return;
 		}
 
-		const bookings = await Booking.find({
-			userEmail: user.email.toLowerCase().trim(),
-		})
-			.sort({ createdAt: -1 })
-			.lean();
+		const bookings = await prisma.booking.findMany({
+			where: {
+				userEmail: user.email.toLowerCase().trim(),
+			},
+			orderBy: { createdAt: 'desc' },
+		});
 		res.status(200).json({ bookings: bookings.map(toBookingResponse) });
 	} catch (error) {
 		res.status(500).json({ message: "Server error", error });
@@ -239,99 +251,137 @@ export const cancelBooking = async (
 	req: AuthenticatedRequest,
 	res: Response
 ): Promise<void> => {
-	const session = await mongoose.startSession();
-	session.startTransaction();
-
 	try {
 		const rawId = req.params.id;
 		const id = Array.isArray(rawId) ? rawId[0] : rawId;
 		const userId = req.user?.id;
 
+		if (!id) {
+			res.status(400).json({ message: "Booking ID is required" });
+			return;
+		}
+
 		if (!userId) {
-			await session.abortTransaction();
 			res.status(401).json({ message: "Not authorized" });
 			return;
 		}
 
-		const booking = await Booking.findById(id).session(session);
-		if (!booking) {
-			await session.abortTransaction();
-			res.status(404).json({ message: "Booking not found" });
+		const idNum = parseInt(id);
+		if (isNaN(idNum)) {
+			res.status(400).json({ message: "Invalid booking ID" });
 			return;
 		}
 
-		// Users can only cancel their own bookings
-		if (req.user?.role === "user" && booking.userId && String(booking.userId) !== userId) {
-			await session.abortTransaction();
-			res.status(403).json({ message: "Not authorized to cancel this booking" });
-			return;
-		}
+		await prisma.$transaction(async (tx) => {
+			const booking = await tx.booking.findUnique({
+				where: { id: idNum },
+			});
 
-		if (booking.status === "cancelled") {
-			await session.abortTransaction();
-			res.status(409).json({ message: "Booking is already cancelled" });
-			return;
-		}
+			if (!booking) {
+				throw new Error("Booking not found");
+			}
 
-		booking.status = "cancelled";
-		await booking.save({ session });
+			// Users can only cancel their own bookings
+			if (req.user?.role === "user" && booking.userId && booking.userId.toString() !== userId) {
+				throw new Error("Not authorized to cancel this booking");
+			}
 
-		// Release seats back to available
-		if (booking.seatNumbers && booking.seatNumbers.length > 0) {
-			await Seat.updateMany(
-				{ eventId: booking.eventId, seatNumber: { $in: booking.seatNumbers } },
-				{ $set: { state: "available", reservedBy: null, reservedUntil: null } },
-				{ session }
-			);
-		}
+			if (booking.status === "CANCELLED") {
+				throw new Error("Booking is already cancelled");
+			}
 
-		// Decrement ticketsSold
-		if (String(booking.eventId).length === 24) {
-			await Event.findByIdAndUpdate(booking.eventId, {
-				$inc: { ticketsSold: -booking.tickets },
-			}, { session }).catch(() => null);
-		}
+			// Update booking status
+			await tx.booking.update({
+				where: { id: booking.id },
+				data: { status: "CANCELLED" },
+			});
 
-		// Refund wallet (full refund)
-		const user = await User.findById(booking.userId || userId).session(session);
-		if (user) {
-			let wallet = await Wallet.findOne({ userEmail: user.email.toLowerCase() }).session(session);
-			if (!wallet) {
-				wallet = new Wallet({
-					userId: user._id,
-					userEmail: user.email.toLowerCase(),
-					balance: 0,
+			// Release seats back to available
+			if (booking.seatNumbers && booking.seatNumbers.length > 0) {
+				const eventIdNum = booking.eventId;
+				if (eventIdNum) {
+					await tx.seat.updateMany({
+						where: {
+							eventId: eventIdNum,
+							seatNumber: { in: booking.seatNumbers },
+						},
+						data: {
+							state: "AVAILABLE",
+							reservedBy: null,
+							reservedUntil: null,
+						},
+					});
+				}
+			}
+
+			// Decrement ticketsSold
+			const eventIdNum = booking.eventId;
+			if (eventIdNum) {
+				await tx.event.update({
+					where: { id: eventIdNum },
+					data: {
+						ticketsSold: {
+							decrement: booking.tickets,
+						},
+					},
 				});
 			}
-			wallet.balance += booking.totalAmount;
-			await wallet.save({ session });
 
-			await WalletTransaction.create(
-				[{
-					userId: user._id,
-					userEmail: user.email.toLowerCase(),
-					userName: user.name,
-					type: "credit",
-					amount: booking.totalAmount,
-					description: `Refund for cancelled booking: ${booking.eventName}`,
-					referenceType: "BOOKING_CANCEL",
-					referenceId: booking._id.toString(),
-				}],
-				{ session }
-			);
-		}
+			// Refund wallet (full refund)
+			const user = await tx.user.findUnique({
+				where: { id: booking.userId || parseInt(userId) },
+			});
 
-		await session.commitTransaction();
+			if (user) {
+				let wallet = await tx.wallet.findUnique({
+					where: { userId: user.id },
+				});
+
+				if (!wallet) {
+					wallet = await tx.wallet.create({
+						data: {
+							userId: user.id,
+							userEmail: user.email,
+							balance: 0,
+						},
+					});
+				}
+
+				await tx.wallet.update({
+					where: { id: wallet.id },
+					data: {
+						balance: {
+							increment: booking.totalAmount,
+						},
+					},
+				});
+
+				await tx.walletTransaction.create({
+					data: {
+						userId: user.id,
+						userEmail: user.email,
+						userName: user.name,
+						type: "CREDIT",
+						amount: booking.totalAmount,
+						description: `Refund for cancelled booking: ${booking.eventName}`,
+						referenceType: "BOOKING_CANCEL",
+						referenceId: booking.id.toString(),
+					},
+				});
+			}
+		});
+
+		// Get updated booking for response
+		const updatedBooking = await prisma.booking.findUnique({
+			where: { id: idNum },
+		});
 
 		res.status(200).json({
 			message: "Booking cancelled successfully",
-			booking: toBookingResponse(booking),
+			booking: updatedBooking ? toBookingResponse(updatedBooking) : null,
 		});
-	} catch (error) {
-		await session.abortTransaction();
-		res.status(500).json({ message: "Server error", error });
-	} finally {
-		session.endSession();
+	} catch (error: any) {
+		res.status(500).json({ message: error.message || "Server error", error });
 	}
 };
 
@@ -340,13 +390,9 @@ export const confirmBooking = async (
 	req: AuthenticatedRequest,
 	res: Response
 ): Promise<void> => {
-	const session = await mongoose.startSession();
-	session.startTransaction();
-
 	try {
 		const userId = req.user?.id;
 		if (!userId) {
-			await session.abortTransaction();
 			res.status(401).json({ message: "Not authorized" });
 			return;
 		}
@@ -364,200 +410,203 @@ export const confirmBooking = async (
 		} = req.body;
 
 		if (!reservationId || !eventId || !seatNumbers || totalAmount === undefined) {
-			await session.abortTransaction();
 			res.status(400).json({ message: "reservationId, eventId, seatNumbers, and totalAmount are required" });
-			return;
-		}
-
-		if (!mongoose.Types.ObjectId.isValid(reservationId)) {
-			await session.abortTransaction();
-			res.status(400).json({ message: "Invalid reservationId" });
-			return;
-		}
-
-		const existingBooking = await Booking.findOne({ reservationId }).session(session);
-		if (existingBooking) {
-			await session.abortTransaction();
-			res.status(200).json(toBookingResponse(existingBooking));
 			return;
 		}
 
 		const amount = Number(totalAmount);
 		if (!Number.isFinite(amount) || amount <= 0) {
-			await session.abortTransaction();
 			res.status(400).json({ message: "totalAmount must be a positive number" });
 			return;
 		}
 
-		// 1. Load and validate reservation
-		const reservation = await Reservation.findById(reservationId).session(session);
-		if (!reservation) {
-			await session.abortTransaction();
-			res.status(400).json({ message: "Reservation not found or already consumed" });
-			return;
-		}
-
-		if (String(reservation.userId) !== userId) {
-			await session.abortTransaction();
-			res.status(403).json({ message: "Reservation does not belong to you" });
-			return;
-		}
-
-		if (String(reservation.eventId) !== String(eventId)) {
-			await session.abortTransaction();
-			res.status(400).json({ message: "Reservation does not match eventId" });
-			return;
-		}
-
-		if (reservation.expiresAt < new Date()) {
-			await session.abortTransaction();
-			res.status(400).json({ message: "Reservation has expired. Please select seats again." });
-			return;
-		}
-
-		// 2. Verify all seats still reserved by this user
 		const requestedSeats = Array.isArray(seatNumbers) ? seatNumbers : [];
 		if (requestedSeats.length === 0) {
-			await session.abortTransaction();
 			res.status(400).json({ message: "seatNumbers must be a non-empty array" });
 			return;
 		}
 
-		const reservationSeatSet = new Set(reservation.seatNumbers);
-		const isSeatMismatch =
-			requestedSeats.length !== reservation.seatNumbers.length ||
-			requestedSeats.some((seat: string) => !reservationSeatSet.has(seat));
+		const result = await prisma.$transaction(async (tx) => {
+			// Check for existing booking
+			const existingBooking = await tx.booking.findFirst({
+				where: { reservationId: reservationId },
+			});
 
-		if (isSeatMismatch) {
-			await session.abortTransaction();
-			res.status(400).json({ message: "seatNumbers do not match reservation" });
-			return;
-		}
-
-		const seats = await Seat.find({
-			eventId: reservation.eventId,
-			seatNumber: { $in: requestedSeats },
-			state: "reserved",
-			reservedBy: new mongoose.Types.ObjectId(userId),
-		}).session(session);
-
-		if (seats.length !== requestedSeats.length) {
-			await session.abortTransaction();
-			res.status(409).json({ message: "One or more seats are no longer reserved by you" });
-			return;
-		}
-
-		// 3. Load user
-		const user = await User.findById(userId).session(session);
-		if (!user) {
-			await session.abortTransaction();
-			res.status(404).json({ message: "User not found" });
-			return;
-		}
-
-		// 4/5. Atomically debit wallet with balance guard (race-safe)
-		const wallet = await Wallet.findOneAndUpdate(
-			{ userEmail: user.email.toLowerCase(), balance: { $gte: amount } },
-			{ $inc: { balance: -amount } },
-			{ new: true, session }
-		);
-
-		if (!wallet) {
-			await session.abortTransaction();
-			res.status(400).json({ message: "Insufficient wallet balance" });
-			return;
-		}
-
-		// 6. Create debit transaction
-		await WalletTransaction.create(
-			[{
-				userId: user._id,
-				userEmail: user.email.toLowerCase(),
-				userName: user.name,
-				type: "debit",
-				amount,
-				description: `Ticket booking: ${eventName || eventId}`,
-				referenceType: "BOOKING",
-				referenceId: reservationId,
-			}],
-			{ session }
-		);
-
-		// 7. Mark seats as booked
-		await Seat.updateMany(
-			{
-				eventId: reservation.eventId,
-				seatNumber: { $in: requestedSeats },
-				state: "reserved",
-				reservedBy: new mongoose.Types.ObjectId(userId),
-			},
-			{ $set: { state: "booked", reservedBy: null, reservedUntil: null } },
-			{ session }
-		);
-
-		const bookedSeatsResult = await Seat.countDocuments({
-			eventId: reservation.eventId,
-			seatNumber: { $in: requestedSeats },
-			state: "booked",
-		}).session(session);
-
-		if (bookedSeatsResult !== requestedSeats.length) {
-			await session.abortTransaction();
-			res.status(409).json({ message: "Seats no longer available" });
-			return;
-		}
-
-		// 8. Determine event details (fallback to Event doc if not provided)
-		let resolvedEventName = eventName;
-		let resolvedEventDate = eventDate;
-		let resolvedEventTime = eventTime;
-
-		if (!resolvedEventName || !resolvedEventDate) {
-			const eventDoc = await Event.findById(eventId).lean();
-			if (eventDoc) {
-				resolvedEventName = resolvedEventName ?? eventDoc.name;
-				resolvedEventDate = resolvedEventDate ?? new Date(eventDoc.date).toISOString().slice(0, 10);
-				resolvedEventTime = resolvedEventTime ?? eventDoc.time ?? "TBD";
+			if (existingBooking) {
+				return { booking: existingBooking };
 			}
-		}
 
-		// 9. Create booking record
-		const [booking] = await Booking.create(
-			[{
-				eventId: String(eventId),
-				reservationId: String(reservationId),
-				eventName: resolvedEventName ?? "Unknown Event",
-				eventDate: resolvedEventDate ?? "",
-				eventTime: resolvedEventTime ?? "TBD",
-				userId: new mongoose.Types.ObjectId(userId),
-				userEmail: (userEmail || user.email).toLowerCase(),
-				userName: userName || user.name,
-				tickets: requestedSeats.length,
-				totalAmount: amount,
-				seatNumbers: requestedSeats,
-				status: "confirmed",
-			}],
-			{ session }
-		);
+			// 1. Load and validate reservation
+			const reservation = await tx.reservation.findUnique({
+				where: { id: parseInt(reservationId) },
+			});
 
-		// Increment ticketsSold
-		if (String(eventId).length === 24) {
-			await Event.findByIdAndUpdate(eventId, {
-				$inc: { ticketsSold: requestedSeats.length },
-			}, { session }).catch(() => null);
-		}
+			if (!reservation) {
+				throw new Error("Reservation not found or already consumed");
+			}
 
-		// 10. Delete reservation
-		await Reservation.findByIdAndDelete(reservationId).session(session);
+			if (reservation.userId.toString() !== userId) {
+				throw new Error("Reservation does not belong to you");
+			}
 
-		await session.commitTransaction();
+			if (reservation.eventId.toString() !== eventId.toString()) {
+				throw new Error("Reservation does not match eventId");
+			}
 
-		res.status(201).json(toBookingResponse(booking));
-	} catch (error) {
-		await session.abortTransaction();
-		res.status(500).json({ message: "Server error", error });
-	} finally {
-		session.endSession();
+			if (reservation.expiresAt < new Date()) {
+				throw new Error("Reservation has expired. Please select seats again.");
+			}
+
+			// 2. Verify all seats still reserved by this user
+			const reservationSeatSet = new Set(reservation.seatNumbers);
+			const isSeatMismatch =
+				requestedSeats.length !== reservation.seatNumbers.length ||
+				requestedSeats.some((seat: string) => !reservationSeatSet.has(seat));
+
+			if (isSeatMismatch) {
+				throw new Error("seatNumbers do not match reservation");
+			}
+
+			const seats = await tx.seat.findMany({
+				where: {
+					eventId: reservation.eventId,
+					seatNumber: { in: requestedSeats },
+					state: "RESERVED",
+					reservedBy: reservation.userId,
+				},
+			});
+
+			if (seats.length !== requestedSeats.length) {
+				throw new Error("One or more seats are no longer reserved by you");
+			}
+
+			// 3. Load user
+			const user = await tx.user.findUnique({
+				where: { id: reservation.userId },
+			});
+
+			if (!user) {
+				throw new Error("User not found");
+			}
+
+			// 4/5. Atomically debit wallet with balance guard (race-safe)
+			const wallet = await tx.wallet.findFirst({
+				where: {
+					userEmail: user.email.toLowerCase(),
+					balance: { gte: amount },
+				},
+			});
+
+			if (!wallet) {
+				throw new Error("Insufficient wallet balance");
+			}
+
+			await tx.wallet.update({
+				where: { id: wallet.id },
+				data: {
+					balance: {
+						decrement: amount,
+					},
+				},
+			});
+
+			// 6. Create debit transaction
+			await tx.walletTransaction.create({
+				data: {
+					userId: user.id,
+					userEmail: user.email.toLowerCase(),
+					userName: user.name,
+					type: "DEBIT",
+					amount,
+					description: `Ticket booking: ${eventName || eventId}`,
+					referenceType: "BOOKING",
+					referenceId: reservationId,
+				},
+			});
+
+			// 7. Mark seats as booked
+			await tx.seat.updateMany({
+				where: {
+					eventId: reservation.eventId,
+					seatNumber: { in: requestedSeats },
+					state: "RESERVED",
+					reservedBy: reservation.userId,
+				},
+				data: {
+					state: "BOOKED",
+					reservedBy: null,
+					reservedUntil: null,
+				},
+			});
+
+			// 8. Verify seats are booked
+			const bookedSeatsCount = await tx.seat.count({
+				where: {
+					eventId: reservation.eventId,
+					seatNumber: { in: requestedSeats },
+					state: "BOOKED",
+				},
+			});
+
+			if (bookedSeatsCount !== requestedSeats.length) {
+				throw new Error("Seats no longer available");
+			}
+
+			// 9. Determine event details (fallback to Event doc if not provided)
+			let resolvedEventName = eventName;
+			let resolvedEventDate = eventDate;
+			let resolvedEventTime = eventTime;
+
+			if (!resolvedEventName || !resolvedEventDate) {
+				const eventDoc = await tx.event.findUnique({
+					where: { id: parseInt(eventId) },
+				});
+				if (eventDoc) {
+					resolvedEventName = resolvedEventName ?? eventDoc.name;
+					resolvedEventDate = resolvedEventDate ?? eventDoc.date.toISOString().slice(0, 10);
+					resolvedEventTime = resolvedEventTime ?? eventDoc.time ?? "TBD";
+				}
+			}
+
+			// 10. Create booking record
+			const booking = await tx.booking.create({
+				data: {
+					eventId: eventId.toString(),
+					reservationId: reservationId.toString(),
+					eventName: resolvedEventName ?? "Unknown Event",
+					eventDate: resolvedEventDate ?? "",
+					eventTime: resolvedEventTime ?? "TBD",
+					userId: reservation.userId,
+					userEmail: (userEmail || user.email).toLowerCase(),
+					userName: userName || user.name,
+					tickets: requestedSeats.length,
+					totalAmount: amount,
+					seatNumbers: requestedSeats,
+					status: "CONFIRMED",
+				},
+			});
+
+			// 11. Increment ticketsSold
+			await tx.event.update({
+				where: { id: parseInt(eventId) },
+				data: {
+					ticketsSold: {
+						increment: requestedSeats.length,
+					},
+				},
+			});
+
+			// 12. Delete reservation
+			await tx.reservation.delete({
+				where: { id: reservation.id },
+			});
+
+			return { booking };
+		});
+
+		res.status(201).json(toBookingResponse(result.booking));
+	} catch (error: any) {
+		res.status(500).json({ message: error.message || "Server error", error });
 	}
 };
 
@@ -566,84 +615,123 @@ export const adminCancelBooking = async (
 	req: AuthenticatedRequest,
 	res: Response
 ): Promise<void> => {
-	const session = await mongoose.startSession();
-	session.startTransaction();
-
 	try {
 		const { id } = req.params;
-
-		const booking = await Booking.findById(id).session(session);
-		if (!booking) {
-			await session.abortTransaction();
-			res.status(404).json({ message: "Booking not found" });
+		const idStr = Array.isArray(id) ? id[0] : id;
+		
+		if (!idStr) {
+			res.status(400).json({ message: "Booking ID is required" });
 			return;
 		}
 
-		if (booking.status === "cancelled") {
-			await session.abortTransaction();
-			res.status(409).json({ message: "Booking is already cancelled" });
+		const idNum = parseInt(idStr);
+		if (isNaN(idNum)) {
+			res.status(400).json({ message: "Invalid booking ID" });
 			return;
 		}
 
-		booking.status = "cancelled";
-		await booking.save({ session });
+		const result = await prisma.$transaction(async (tx) => {
+			const booking = await tx.booking.findUnique({
+				where: { id: idNum },
+			});
 
-		// Release seats
-		if (booking.seatNumbers && booking.seatNumbers.length > 0) {
-			await Seat.updateMany(
-				{ eventId: booking.eventId, seatNumber: { $in: booking.seatNumbers } },
-				{ $set: { state: "available", reservedBy: null, reservedUntil: null } },
-				{ session }
-			);
-		}
+			if (!booking) {
+				throw new Error("Booking not found");
+			}
 
-		// Decrement ticketsSold
-		if (String(booking.eventId).length === 24) {
-			await Event.findByIdAndUpdate(booking.eventId, {
-				$inc: { ticketsSold: -booking.tickets },
-			}, { session }).catch(() => null);
-		}
+			if (booking.status === "CANCELLED") {
+				throw new Error("Booking is already cancelled");
+			}
 
-		// Full refund to booking owner
-		const owner = await User.findOne({ email: booking.userEmail.toLowerCase() }).session(session);
-		if (owner) {
-			let wallet = await Wallet.findOne({ userEmail: owner.email.toLowerCase() }).session(session);
-			if (!wallet) {
-				wallet = new Wallet({
-					userId: owner._id,
-					userEmail: owner.email.toLowerCase(),
-					balance: 0,
+			// Update booking status
+			const updatedBooking = await tx.booking.update({
+				where: { id: idNum },
+				data: { status: "CANCELLED" },
+			});
+
+			// Release seats
+			if (booking.seatNumbers && booking.seatNumbers.length > 0) {
+				const eventIdNum = booking.eventId;
+				if (eventIdNum) {
+					await tx.seat.updateMany({
+						where: {
+							eventId: eventIdNum,
+							seatNumber: { in: booking.seatNumbers },
+						},
+						data: {
+							state: "AVAILABLE",
+							reservedBy: null,
+							reservedUntil: null,
+						},
+					});
+				}
+			}
+
+			// Decrement ticketsSold
+			const eventIdNum = booking.eventId;
+			if (eventIdNum) {
+				await tx.event.update({
+					where: { id: eventIdNum },
+					data: {
+						ticketsSold: {
+							decrement: booking.tickets,
+						},
+					},
 				});
 			}
-			wallet.balance += booking.totalAmount;
-			await wallet.save({ session });
 
-			await WalletTransaction.create(
-				[{
-					userId: owner._id,
-					userEmail: owner.email.toLowerCase(),
-					userName: owner.name,
-					type: "credit",
-					amount: booking.totalAmount,
-					description: `Admin refund for cancelled booking: ${booking.eventName}`,
-					referenceType: "BOOKING_CANCEL",
-					referenceId: booking._id.toString(),
-				}],
-				{ session }
-			);
-		}
+			// Full refund to booking owner
+			const owner = await tx.user.findFirst({
+				where: { email: booking.userEmail.toLowerCase() },
+			});
 
-		await session.commitTransaction();
+			if (owner) {
+				let wallet = await tx.wallet.findFirst({
+					where: { userEmail: owner.email.toLowerCase() },
+				});
+
+				if (!wallet) {
+					wallet = await tx.wallet.create({
+						data: {
+							userId: owner.id,
+							userEmail: owner.email.toLowerCase(),
+							balance: 0,
+						},
+					});
+				}
+
+				await tx.wallet.update({
+					where: { id: wallet.id },
+					data: {
+						balance: {
+							increment: booking.totalAmount,
+						},
+					},
+				});
+
+				await tx.walletTransaction.create({
+					data: {
+						userId: owner.id,
+						userEmail: owner.email.toLowerCase(),
+						userName: owner.name,
+						type: "CREDIT",
+						amount: booking.totalAmount,
+						description: `Admin refund for cancelled booking: ${booking.eventName}`,
+						referenceType: "BOOKING_CANCEL",
+						referenceId: booking.id.toString(),
+					},
+				});
+			}
+
+			return { booking: updatedBooking };
+		});
 
 		res.status(200).json({
 			message: "Booking cancelled and refund issued",
-			booking: toBookingResponse(booking),
+			booking: toBookingResponse(result.booking),
 		});
-	} catch (error) {
-		await session.abortTransaction();
-		res.status(500).json({ message: "Server error", error });
-	} finally {
-		session.endSession();
+	} catch (error: any) {
+		res.status(500).json({ message: error.message || "Server error", error });
 	}
 };
 

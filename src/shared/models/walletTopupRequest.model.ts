@@ -1,71 +1,62 @@
-import mongoose from "mongoose";
+// WalletTopupRequest model interfaces for Prisma/PostgreSQL
+import { PaymentMode, TopupStatus } from "../../generated/prisma/enums";
 
-const walletTopupRequestSchema = new mongoose.Schema(
-  {
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    userEmail: {
-      type: String,
-      required: true,
-      lowercase: true,
-      index: true,
-    },
-    userName: {
-      type: String,
-      required: true,
-    },
-    amount: {
-      type: Number,
-      required: true,
-      min: 1,
-      max: 100000,
-    },
-    paymentMode: {
-      type: String,
-      enum: ["UPI", "Debit Card", "Credit Card", "Bank Transfer", "Net Banking"],
-      required: true,
-    },
-    receiptUrl: {
-      type: String,
-      required: false,
-    },
-    receiptPublicId: {
-      type: String,
-      required: false,
-    },
-    declarationAccepted: {
-      type: Boolean,
-      required: true,
-      default: false,
-    },
-    status: {
-      type: String,
-      enum: ["pending", "approved", "rejected"],
-      default: "pending",
-      index: true,
-    },
-    adminId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: false,
-    },
-    adminRemarks: {
-      type: String,
-      required: false,
-    },
-    resolvedAt: {
-      type: Date,
-      required: false,
-    },
-  },
-  { timestamps: true }
-);
+export interface WalletTopupRequest {
+  id: number;
+  userId: number;
+  userEmail: string;
+  userName: string;
+  amount: number;
+  paymentMode: PaymentMode;
+  receiptUrl?: string | null;
+  receiptPublicId?: string | null;
+  declarationAccepted: boolean;
+  status: TopupStatus;
+  adminId?: number | null;
+  adminRemarks?: string | null;
+  resolvedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-// Create indexes
-walletTopupRequestSchema.index({ status: 1, createdAt: -1 });
-walletTopupRequestSchema.index({ userEmail: 1, createdAt: -1 });
+export interface WalletTopupRequestWithRelations extends WalletTopupRequest {
+  user: {
+    id: number;
+    name: string;
+    email: string;
+  };
+  admin?: {
+    id: number;
+    name: string;
+    email: string;
+  } | null;
+}
 
-export default mongoose.model("WalletTopupRequest", walletTopupRequestSchema);
+export interface CreateWalletTopupRequestInput {
+  userId: number;
+  userEmail: string;
+  userName: string;
+  amount: number;
+  paymentMode: PaymentMode;
+  receiptUrl?: string;
+  receiptPublicId?: string;
+  declarationAccepted?: boolean;
+}
+
+export interface UpdateWalletTopupRequestInput {
+  status?: TopupStatus;
+  adminId?: number;
+  adminRemarks?: string;
+  resolvedAt?: Date;
+}
+
+export interface WalletTopupRequestFilters {
+  userId?: number;
+  userEmail?: string;
+  status?: TopupStatus;
+  paymentMode?: PaymentMode;
+  createdAt?: {
+    gte?: Date;
+    lte?: Date;
+  };
+}

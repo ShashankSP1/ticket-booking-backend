@@ -22,7 +22,13 @@ const toEventDate = (date: unknown, time: unknown): Date | null => {
 	return null;
 };
 
-const isValidHHmm = (value: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+// const isValidHHmm = (value: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+
+const isValidTime = (value: string): boolean => {
+	const hhmm24 = /^([01]\d|2[0-3]):[0-5]\d$/; // 24-hour format
+	const hhmm12 = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i; // 12-hour format with optional AM/PM
+	return hhmm24.test(value) || hhmm12.test(value);
+}
 
 const toEventResponse = (event: any) => ({
 	id: event.id,
@@ -197,7 +203,7 @@ export const createEvent = async (
 			return;
 		}
 
-		if (typeof time !== "string" || !isValidHHmm(time)) {
+		if (typeof time !== "string" || !isValidTime(time)) {
 			res.status(400).json({ message: "Time must be valid HH:mm format" });
 			return;
 		}

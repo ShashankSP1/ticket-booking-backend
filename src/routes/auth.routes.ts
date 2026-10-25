@@ -4,7 +4,9 @@ import {
 	loginUser,
 	registerAdmin,
 	registerUser,
+	getMe,
 } from "../controllers/auth.controller";
+import { protect } from "../middleware/auth.middleware";
 
 const router = Router();
 
@@ -16,5 +18,7 @@ router.post("/admin/register", registerAdmin);
 router.post("/admin/signup", registerAdmin);
 router.post("/admin/login", loginAdmin);
 router.post("/admin/signin", loginAdmin);
+
+router.get("/me", protect, getMe);
 
 export default router;

@@ -4,6 +4,16 @@ import User from "../shared/models/user.model";
 import Admin from "../shared/models/admin.model";
 import generateToken from "../utils/generateToken";
 import { UserRole } from "../generated/prisma/enums";
+import prisma from "../config/prisma";
+
+interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string;
+    role?: string;
+    email?: string;
+    name?: string;
+  };
+}
 
 export const registerUser = async (
   req: Request,
@@ -253,5 +263,74 @@ export const registerAdmin = async (
     });
   } catch (error) {
     res.status(500).json({ message: "Server error", error });
+  }
+};
+
+export const getMe = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    const role = req.user?.role;
+
+    if (!userId || !role) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+
+    if (role === "admin") {
+      const admin = await Admin.findOne({
+        id: Number(userId),
+      });
+
+      if (!admin) {
+        res.status(404).json({ message: "Admin not found" });
+        return;
+      }
+
+      res.status(200).json({
+        message: "Current user fetched successfully",
+        user: {
+          id: admin.id,
+          name: admin.name,
+          email: admin.email,
+          role: admin.role,
+        },
+      });
+
+      return;
+    }
+
+    if (role === "user") {
+      const user = await User.findOne({
+        id: Number(userId),
+      });
+
+      if (!user) {
+        res.status(404).json({ message: "User not found" });
+        return;
+      }
+
+      res.status(200).json({
+        message: "Current user fetched successfully",
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+
+      return;
+    }
+
+    res.status(403).json({ message: "Invalid user role" });
+  } catch (error) {
+    console.error("Get current user failed:", error);
+
+    res.status(500).json({
+      message: "Server error",
+    });
   }
 };

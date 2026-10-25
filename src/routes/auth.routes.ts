@@ -8,31 +8,13 @@ import {
 
 const router = Router();
 
-const isAdminRole = (role: unknown): boolean =>
-	typeof role === "string" && role.toLowerCase() === "admin";
+router.post("/user/register", registerUser);
+router.post("/user/login", loginUser);
+router.post("/user/signin", loginUser);
 
-router.post("/register", (req, res) => {
-	if (isAdminRole(req.body?.role)) {
-		return registerAdmin(req, res);
-	}
-
-	return registerUser(req, res);
-});
-
-router.post("/login", (req, res) => {
-	if (isAdminRole(req.body?.role)) {
-		return loginAdmin(req, res);
-	}
-
-	return loginUser(req, res);
-});
-
-router.post("/signin", (req, res) => {
-	if (isAdminRole(req.body?.role)) {
-		return loginAdmin(req, res);
-	}
-
-	return loginUser(req, res);
-});
+router.post("/admin/register", registerAdmin);
+router.post("/admin/signup", registerAdmin);
+router.post("/admin/login", loginAdmin);
+router.post("/admin/signin", loginAdmin);
 
 export default router;

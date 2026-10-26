@@ -6,10 +6,8 @@ import User from "../shared/models/user.model";
 
 const router = Router();
 
-router.post("/signup", registerUser);
-router.post("/register", registerUser);
-router.post("/login", loginUserOnly);
-router.post("/signin", loginUserOnly);
+router.post("/user/register", registerUser);
+router.post("/user/login", loginUserOnly);
 
 // Get wallet balance for logged-in user
 router.get("/wallet", protect, async (req: AuthenticatedRequest, res: Response): Promise<void> => {

@@ -12,12 +12,9 @@ const router = Router();
 
 router.post("/user/register", registerUser);
 router.post("/user/login", loginUser);
-router.post("/user/signin", loginUser);
 
 router.post("/admin/register", registerAdmin);
-router.post("/admin/signup", registerAdmin);
 router.post("/admin/login", loginAdmin);
-router.post("/admin/signin", loginAdmin);
 
 router.get("/me", protect, getMe);
 

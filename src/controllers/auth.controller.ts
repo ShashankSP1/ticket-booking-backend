@@ -192,7 +192,7 @@ export const loginAdmin = async (
   }
 };
 
-// Admin signup — protected with ADMIN_SECRET env variable
+// Admin register — protected with ADMIN_SECRET env variable
 export const registerAdmin = async (
   req: Request,
   res: Response,
@@ -212,7 +212,7 @@ export const registerAdmin = async (
     if (!adminSecret) {
       res.status(400).json({
         message:
-          "Admin signup requires adminSecret (accepted keys: adminSecret, admin_secret, secretKey)",
+          "Admin register requires adminSecret (accepted keys: adminSecret, admin_secret, secretKey)",
       });
       return;
     }

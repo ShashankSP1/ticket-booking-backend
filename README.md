@@ -103,8 +103,8 @@ Health check:
 
 - POST /api/auth/register
 - POST /api/auth/signin
-- POST /api/admin/signin
-- POST /api/admin/register
+- POST /api/auth/admin/signin
+- POST /api/auth/admin/register
 
 ### Events
 

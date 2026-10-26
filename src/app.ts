@@ -22,8 +22,8 @@ app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.use("/api/auth", authRoutes);     // legacy — kept for backward compat
-app.use("/api/user", userRoutes);     // user/signup, user/login
-app.use("/api/admin", adminRoutes);   // admin/signup, admin/login
+app.use("/api/user", userRoutes);     // user/register, user/login
+app.use("/api/admin", adminRoutes);   // admin/register, admin/login
 app.use("/api/events", eventRoutes);  // events listing, create, update
 app.use("/api/events/:eventId/seats", seatRoutes);  // seat management per event
 app.use("/api/bookings", bookingRoutes); // bookings management

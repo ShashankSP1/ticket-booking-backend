@@ -10,16 +10,19 @@ import bookingRoutes from "./routes/booking.routes";
 import walletRoutes from "./routes/wallet.routes";
 import seatRoutes from "./routes/seat.routes";
 import reservationRoutes from "./routes/reservation.routes";
+const { swaggerUi, swaggerSpec } = require("./swagger");
 
 dotenv.config();
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
 // Serve uploaded files
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+
+// Serve Swagger UI
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use("/api/auth", authRoutes);     // legacy — kept for backward compat
 app.use("/api/user", userRoutes);     // user/register, user/login
